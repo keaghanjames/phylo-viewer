@@ -233,7 +233,7 @@ export default function App() {
   const [feedbackStatus, setFeedbackStatus] = useState("idle"); // idle | sending | success | error
 
   // Paste your Formspree endpoint here after creating a form at formspree.io
-  const FORMSPREE_ENDPOINT = "https://formspree.io/f/YOUR_FORM_ID";
+  const FORMSPREE_ENDPOINT = "https://formspree.io/f/xgorpzja";
 
   const openFeedback = function() { setFeedbackOpen(true); setFeedbackStatus("idle"); };
   const closeFeedback = function() { setFeedbackOpen(false); };

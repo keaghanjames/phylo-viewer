@@ -5,9 +5,7 @@ PHYLO VIEWER — PATCH NOTES
 --------------------
 - Added feedback form (Feedback button in header)
   - Collects email address, feedback type (bug / feature / general), and message
-  - Submits to Formspree; responses stored in dashboard and emailed on receipt
-  - TODO: replace FORMSPREE_ENDPOINT placeholder in phylo-tree-viewer.jsx with
-    the real endpoint from formspree.io before merging to main
+  - Submits to Formspree (xgorpzja); responses stored in dashboard and emailed on receipt
 
 
 [v1.1.0] — 2026-04-23

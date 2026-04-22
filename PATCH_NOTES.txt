@@ -1,0 +1,41 @@
+PHYLO VIEWER — PATCH NOTES
+==========================
+
+[v0.1.1] — 2026-04-23
+----------------------
+- Added feedback form (Feedback button in header)
+  - Collects email address, feedback type (bug / feature / general), and message
+  - Submits to Formspree (xgorpzja); responses stored in dashboard and emailed on receipt
+- Updated header title to "Phylo Viewer v0.1"
+
+
+[v1.1.0] — 2026-04-23
+----------------------
+- Replaced Vite boilerplate favicon with cartoon Darwin "I think" tree icon
+  (green rounded square, white tree silhouette capturing trunk, basal node
+  circle, lower-right A branch, left D branches, and upper B/C canopy)
+- Updated app header: replaced 🌿 emoji with the Darwin tree SVG icon
+- Updated README with live app URL and description of what the tool does
+
+
+[v1.0.0] — 2026-04-22
+----------------------
+- Initial release
+- Vite + React + D3 project scaffolded and deployed to GitHub Pages
+  at https://keaghanjames.github.io/phylo-viewer/
+- Core phylogenetic tree viewer features:
+  - Load trees from .nwk / .tre files or paste Newick string directly
+  - Rectangular and radial layouts
+  - Branch-length scaling with time axis and flip (time before present)
+  - Zoom, pan, snap-to-node navigation; Space to re-centre
+  - Clade selection (click), MRCA selection (Shift+click),
+    paraphyletic group (Cmd/Ctrl+click)
+  - Clade collapse, extract, delete
+  - Paraphyletic group Phylogenetic Diversity calculation
+  - Ladderize (ascending / descending)
+  - Reroot on any node
+  - Undo (20-step history)
+  - Export to Newick (.nwk)
+  - Tip label search with zoom-to-result
+  - Toggle tip labels on/off; adjustable font size
+  - GitHub Actions CI/CD for automatic deployment on push to main

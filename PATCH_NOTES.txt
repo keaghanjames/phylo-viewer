@@ -1,11 +1,12 @@
 PHYLO VIEWER — PATCH NOTES
 ==========================
 
-[dev] — in progress
---------------------
+[v0.1.1] — 2026-04-23
+----------------------
 - Added feedback form (Feedback button in header)
   - Collects email address, feedback type (bug / feature / general), and message
   - Submits to Formspree (xgorpzja); responses stored in dashboard and emailed on receipt
+- Updated header title to "Phylo Viewer v0.1"
 
 
 [v1.1.0] — 2026-04-23

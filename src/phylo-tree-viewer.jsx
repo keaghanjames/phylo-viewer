@@ -226,6 +226,33 @@ export default function App() {
   const [cladeFocusId, setCladeFocusId] = useState(null);
   const [activePanel, setActivePanel] = useState("clade");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackEmail, setFeedbackEmail] = useState("");
+  const [feedbackType, setFeedbackType] = useState("bug");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackStatus, setFeedbackStatus] = useState("idle"); // idle | sending | success | error
+
+  // Paste your Formspree endpoint here after creating a form at formspree.io
+  const FORMSPREE_ENDPOINT = "https://formspree.io/f/YOUR_FORM_ID";
+
+  const openFeedback = function() { setFeedbackOpen(true); setFeedbackStatus("idle"); };
+  const closeFeedback = function() { setFeedbackOpen(false); };
+
+  const submitFeedback = async function() {
+    if (!feedbackEmail.trim() || !feedbackMessage.trim()) return;
+    setFeedbackStatus("sending");
+    try {
+      const res = await fetch(FORMSPREE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ email: feedbackEmail, type: feedbackType, message: feedbackMessage }),
+      });
+      setFeedbackStatus(res.ok ? "success" : "error");
+      if (res.ok) { setFeedbackEmail(""); setFeedbackType("bug"); setFeedbackMessage(""); }
+    } catch(e) {
+      setFeedbackStatus("error");
+    }
+  };
 
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -749,6 +776,7 @@ export default function App() {
           <input type="file" accept=".nwk,.txt,.tree,.tre" onChange={handleFile} style={{ display: "none" }} />
         </label>
         <button style={btn("ghost")} onClick={function() { setNewickInput(sampleNewick); loadTree(sampleNewick); }}>Load sample</button>
+        <button style={btn("ghost")} onClick={openFeedback}>Feedback</button>
         {treeData && (
           <>
             <div style={divider} />
@@ -1026,6 +1054,65 @@ export default function App() {
                 Delete {tipsToDeleteCount} tip{tipsToDeleteCount !== 1 ? "s" : ""}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {feedbackOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}
+          onClick={function(e) { if (e.target === e.currentTarget) closeFeedback(); }}>
+          <div style={{ background: "#fff", borderRadius: 10, padding: 28, maxWidth: 420, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>Share feedback</div>
+              <button onClick={closeFeedback} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
+            </div>
+
+            {feedbackStatus === "success" ? (
+              <div style={{ textAlign: "center", padding: "20px 0" }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>🌿</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 6 }}>Thanks for the feedback!</div>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 20 }}>We'll take a look and be in touch if needed.</div>
+                <button style={btn("secondary")} onClick={closeFeedback}>Close</button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Email *</label>
+                    <input type="email" value={feedbackEmail} onChange={function(e) { setFeedbackEmail(e.target.value); }}
+                      placeholder="you@example.com"
+                      style={{ width: "100%", padding: "7px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, fontFamily: "system-ui, sans-serif", boxSizing: "border-box", outline: "none" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Type</label>
+                    <select value={feedbackType} onChange={function(e) { setFeedbackType(e.target.value); }}
+                      style={{ width: "100%", padding: "7px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, fontFamily: "system-ui, sans-serif", background: "#fff", outline: "none", cursor: "pointer" }}>
+                      <option value="bug">Bug report</option>
+                      <option value="feature">Feature request</option>
+                      <option value="other">General comment</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Message *</label>
+                    <textarea value={feedbackMessage} onChange={function(e) { setFeedbackMessage(e.target.value); }}
+                      placeholder="Describe the bug, feature, or comment…"
+                      rows={5}
+                      style={{ width: "100%", padding: "7px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, fontFamily: "system-ui, sans-serif", resize: "vertical", boxSizing: "border-box", outline: "none" }} />
+                  </div>
+                  {feedbackStatus === "error" && (
+                    <div style={{ fontSize: 12, color: "#dc2626" }}>Something went wrong — please try again.</div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+                  <button style={btn("secondary")} onClick={closeFeedback}>Cancel</button>
+                  <button style={btn("primary")}
+                    disabled={feedbackStatus === "sending" || !feedbackEmail.trim() || !feedbackMessage.trim()}
+                    onClick={submitFeedback}>
+                    {feedbackStatus === "sending" ? "Sending…" : "Send feedback"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

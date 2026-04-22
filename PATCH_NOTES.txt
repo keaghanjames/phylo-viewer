@@ -1,6 +1,14 @@
 PHYLO VIEWER — PATCH NOTES
 ==========================
 
+[dev] — in progress
+--------------------
+- Fixed: switching between Rectangular and Radial layouts now resets the
+  canvas to the centred position (previously the old pan/zoom offset was
+  kept, which could leave the tree off-screen)
+- Renamed "Load Sample" button to "Demo Tree"
+
+
 [v0.1.1] — 2026-04-23
 ----------------------
 - Added feedback form (Feedback button in header)

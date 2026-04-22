@@ -775,13 +775,13 @@ export default function App() {
           Upload .nwk / .tre
           <input type="file" accept=".nwk,.txt,.tree,.tre" onChange={handleFile} style={{ display: "none" }} />
         </label>
-        <button style={btn("ghost")} onClick={function() { setNewickInput(sampleNewick); loadTree(sampleNewick); }}>Load sample</button>
+        <button style={btn("ghost")} onClick={function() { setNewickInput(sampleNewick); loadTree(sampleNewick); }}>Demo Tree</button>
         <button style={btn("ghost")} onClick={openFeedback}>Feedback</button>
         {treeData && (
           <>
             <div style={divider} />
-            <button style={btn(layout === "rectangular" ? "primary" : "ghost")} onClick={function() { setLayout("rectangular"); }}>Rectangular</button>
-            <button style={btn(layout === "radial" ? "primary" : "ghost")} onClick={function() { setLayout("radial"); }}>Radial</button>
+            <button style={btn(layout === "rectangular" ? "primary" : "ghost")} onClick={function() { zoomTransformRef.current = d3.zoomIdentity; setLayout("rectangular"); }}>Rectangular</button>
+            <button style={btn(layout === "radial" ? "primary" : "ghost")} onClick={function() { zoomTransformRef.current = d3.zoomIdentity; setLayout("radial"); }}>Radial</button>
             <div style={divider} />
             <button style={btn("ghost")} onClick={function() { doLadderize(true); }}>Ladderize ↑</button>
             <button style={btn("ghost")} onClick={function() { doLadderize(false); }}>Ladderize ↓</button>

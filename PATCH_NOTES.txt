@@ -3,6 +3,9 @@ PHYLO VIEWER — PATCH NOTES
 
 [dev] — in progress
 --------------------
+- Added Lineages Through Time (LTT) plot (LTT Plot button, visible when tree has branch lengths)
+  - Step-function plot: X = time from root, Y = lineage count (log scale)
+  - Opens in a modal; handles polytomies and non-ultrametric trees
 - Renamed "Radial" layout button to "Radial (Beta)"
 - Arrow keys (↑ ↓ ← →) now pan the canvas view
 - Tip rename: selecting a leaf in the Clade tab shows a rename input field

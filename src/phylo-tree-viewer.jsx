@@ -207,6 +207,30 @@ function sumEdgeLengths(root, edgeIds) {
   return total;
 }
 
+function computeLTT(root) {
+  var events = [];
+  function walk(n, d) {
+    var depth = d + (n.length || 0);
+    if (n.children && n.children.length) {
+      events.push({ time: depth, delta: n.children.length - 1 });
+      n.children.forEach(function(c) { walk(c, depth); });
+    }
+  }
+  events.push({ time: 0, delta: (root.children ? root.children.length : 1) - 1 });
+  if (root.children) root.children.forEach(function(c) { walk(c, 0); });
+  events.sort(function(a, b) { return a.time - b.time; });
+  var pts = [{ t: 0, n: 1 }];
+  var lineages = 1;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    pts.push({ t: ev.time, n: lineages });
+    lineages += ev.delta;
+    pts.push({ t: ev.time, n: lineages });
+  }
+  pts.push({ t: computeMaxDepth(root, 0), n: lineages });
+  return pts;
+}
+
 // ── Trait data utilities ──────────────────────────────────────────────────────
 
 function parseCSVRow(line) {
@@ -298,6 +322,7 @@ export default function App() {
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [renameValue, setRenameValue] = useState("");
+  const [lttOpen, setLttOpen] = useState(false);
 
   const openSource = function() { setSourceText(treeData ? toNewick(treeData) + ";" : ""); setSourceOpen(true); };
   const closeSource = function() { setSourceOpen(false); };
@@ -946,6 +971,9 @@ export default function App() {
             <button style={btn("ghost")} onClick={undo} disabled={history.length === 0}>Undo</button>
             <button style={btn("ghost")} onClick={exportNewick}>Export .nwk</button>
             <button style={btn("ghost")} onClick={openSource}>See Source</button>
+            {hasBranchLengths(treeData) && (
+              <button style={btn("ghost")} onClick={function() { setLttOpen(true); }}>LTT Plot</button>
+            )}
             <div style={divider} />
             <button style={btn(flipAxis ? "active" : "ghost")} onClick={function() { setFlipAxis(function(f) { return !f; }); }}>⇄ Time before present</button>
             <button style={btn(showLabels ? "active" : "ghost")} onClick={function() { setShowLabels(function(s) { return !s; }); }}>Labels {showLabels ? "on" : "off"}</button>
@@ -1360,6 +1388,76 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {lttOpen && treeData && (function() {
+        var hasBL = hasBranchLengths(treeData);
+        var W = 640, H = 340;
+        var mg = { top: 20, right: 30, bottom: 52, left: 58 };
+        var iW = W - mg.left - mg.right, iH = H - mg.top - mg.bottom;
+        var pathD = "", xTicks = [], yTicks = [];
+        if (hasBL) {
+          var pts = computeLTT(treeData);
+          var maxT = Math.max.apply(null, pts.map(function(p) { return p.t; }));
+          var maxN = Math.max.apply(null, pts.map(function(p) { return p.n; }));
+          var xSc = d3.scaleLinear().domain([0, maxT]).range([0, iW]);
+          var ySc = d3.scaleLog().domain([1, Math.max(maxN, 2)]).range([iH, 0]).clamp(true);
+          pathD = pts.map(function(p, i) {
+            return (i === 0 ? "M" : "L") + xSc(p.t).toFixed(1) + "," + ySc(Math.max(1, p.n)).toFixed(1);
+          }).join(" ");
+          xTicks = xSc.ticks(6);
+          yTicks = ySc.ticks(5).filter(function(v) { return v >= 1; });
+        }
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}
+            onClick={function(e) { if (e.target === e.currentTarget) setLttOpen(false); }}>
+            <div style={{ background: "#fff", borderRadius: 10, padding: 24, maxWidth: 700, width: "95%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "#111827" }}>Lineages Through Time</div>
+                <button onClick={function() { setLttOpen(false); }} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
+              </div>
+              {!hasBL ? (
+                <div style={{ fontSize: 13, color: "#6b7280", padding: "20px 0" }}>This tree has no branch lengths — LTT requires a time-scaled tree.</div>
+              ) : (
+                <svg width={W} height={H} style={{ display: "block", maxWidth: "100%", overflow: "visible" }}>
+                  <g transform={"translate(" + mg.left + "," + mg.top + ")"}>
+                    {yTicks.map(function(v) {
+                      var y = ySc(v).toFixed(1);
+                      return <line key={v} x1={0} y1={y} x2={iW} y2={y} stroke="#f3f4f6" strokeWidth={1} />;
+                    })}
+                    {xTicks.map(function(v) {
+                      var x = xSc(v).toFixed(1);
+                      return <line key={v} x1={x} y1={0} x2={x} y2={iH} stroke="#f3f4f6" strokeWidth={1} />;
+                    })}
+                    <path d={pathD} fill="none" stroke="#1a5c35" strokeWidth={2.5} strokeLinejoin="round" />
+                    <line x1={0} y1={iH} x2={iW} y2={iH} stroke="#9ca3af" strokeWidth={1} />
+                    {xTicks.map(function(v) {
+                      var x = xSc(v);
+                      var label = v === 0 ? "0" : (Math.abs(v) >= 0.01 && Math.abs(v) < 10000 ? +v.toPrecision(4) : v.toExponential(2));
+                      return (
+                        <g key={v} transform={"translate(" + x.toFixed(1) + "," + iH + ")"}>
+                          <line y2={5} stroke="#9ca3af" strokeWidth={1} />
+                          <text y={18} textAnchor="middle" fontSize={10} fill="#6b7280">{label}</text>
+                        </g>
+                      );
+                    })}
+                    <text x={iW / 2} y={iH + 44} textAnchor="middle" fontSize={11} fill="#374151">Time from root</text>
+                    <line x1={0} y1={0} x2={0} y2={iH} stroke="#9ca3af" strokeWidth={1} />
+                    {yTicks.map(function(v) {
+                      return (
+                        <g key={v} transform={"translate(0," + ySc(v).toFixed(1) + ")"}>
+                          <line x2={-5} stroke="#9ca3af" strokeWidth={1} />
+                          <text x={-9} textAnchor="end" dominantBaseline="middle" fontSize={10} fill="#6b7280">{v}</text>
+                        </g>
+                      );
+                    })}
+                    <text transform={"translate(-44," + (iH / 2) + ") rotate(-90)"} textAnchor="middle" fontSize={11} fill="#374151">Lineages</text>
+                  </g>
+                </svg>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {sourceOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}

@@ -4,6 +4,8 @@ PHYLO VIEWER — PATCH NOTES
 [dev] — in progress
 --------------------
 - Added trait data visualisation (third sidebar tab: Traits)
+  - Trait squares appear between the tip node and tip label; labels dynamically
+    shift right based on the number of active traits
   - Upload a CSV file (tip names in column 1, traits in remaining columns)
   - Numeric columns auto-detected as continuous (Viridis gradient)
   - Text columns auto-detected as discrete (categorical colour palette)

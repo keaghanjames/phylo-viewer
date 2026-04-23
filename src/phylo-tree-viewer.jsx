@@ -601,10 +601,31 @@ export default function App() {
       ctx.lineWidth = (isFocus || isMultiSel) ? 2 : 1.2;
       ctx.stroke();
 
+      // Trait squares — rectangular layout only, leaf nodes only, drawn between node and label
+      const sqSz = scene.fontSize;
+      const sqPad = 2;
+      const hasTraitSqs = ni.isLeaf && scLayout === "rectangular" && scene.activeTraits && scene.activeTraits.length > 0;
+      const traitBlockW = hasTraitSqs ? scene.activeTraits.length * (sqSz + sqPad) + 2 : 0;
+
+      if (hasTraitSqs) {
+        const sqStart = screenX + gap;
+        scene.activeTraits.forEach(function(traitName, ti) {
+          const tm = scene.traitMeta[traitName]; if (!tm) return;
+          const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][traitName] : null;
+          const color = tv !== null ? tm.colorFn(tv) : null;
+          const x = sqStart + ti * (sqSz + sqPad);
+          ctx.fillStyle = color || "#e5e7eb";
+          ctx.fillRect(x, screenY - sqSz / 2, sqSz, sqSz);
+          ctx.strokeStyle = "rgba(0,0,0,0.1)";
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(x, screenY - sqSz / 2, sqSz, sqSz);
+        });
+      }
+
       if ((showLbls || isMatch || isFocus || isMultiSel) && (ni.name || ni.collapsed)) {
         const label = ni.collapsed ? "[" + (ni.name || "clade") + " ►]" : ni.name || "";
         const goRight = scLayout === "radial" ? (ni.angle < Math.PI) === ni.isLeaf : ni.isLeaf;
-        const lx = screenX + (goRight ? gap : -gap);
+        const lx = screenX + (goRight ? gap + traitBlockW : -gap);
         ctx.font = ((isFocus || isMatch || inClade || isMultiSel) ? "700 " : "") + scene.fontSize + "px system-ui, sans-serif";
         ctx.textAlign = goRight ? "left" : "right";
         ctx.textBaseline = "middle";
@@ -618,26 +639,6 @@ export default function App() {
         }
         ctx.fillStyle = isFocus ? "#dc2626" : isMatch ? "#ef4444" : isMultiSel ? "#7c3aed" : inClade ? "#1d4ed8" : "#374151";
         ctx.fillText(label, lx, screenY);
-      }
-
-      // Trait squares — rectangular layout only, leaf nodes only
-      if (ni.isLeaf && scLayout === "rectangular" && scene.activeTraits && scene.activeTraits.length > 0) {
-        const sqSz = scene.fontSize;
-        const sqPad = 2;
-        ctx.font = scene.fontSize + "px system-ui, sans-serif";
-        const labelW = (showLbls && ni.name) ? ctx.measureText(ni.collapsed ? "[" + (ni.name || "clade") + " ►]" : ni.name).width : 0;
-        const sqStart = screenX + gap + labelW + (labelW > 0 ? 6 : 0);
-        scene.activeTraits.forEach(function(traitName, ti) {
-          const tm = scene.traitMeta[traitName]; if (!tm) return;
-          const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][traitName] : null;
-          const color = tv !== null ? tm.colorFn(tv) : null;
-          const x = sqStart + ti * (sqSz + sqPad);
-          ctx.fillStyle = color || "#e5e7eb";
-          ctx.fillRect(x, screenY - sqSz / 2, sqSz, sqSz);
-          ctx.strokeStyle = "rgba(0,0,0,0.1)";
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(x, screenY - sqSz / 2, sqSz, sqSz);
-        });
       }
     });
 
@@ -807,8 +808,11 @@ export default function App() {
           const label = ni.collapsed ? "[" + ni.name + " ►]" : ni.name;
           ctx.font = fs + "px system-ui, sans-serif";
           const textW = ctx.measureText(label).width;
-          const lx0 = goRight ? screenX + gap : screenX - gap - textW;
-          const lx1 = goRight ? screenX + gap + textW : screenX - gap;
+          const sc = sceneRef.current;
+          const tBlockW = (ni.isLeaf && layout === "rectangular" && sc && sc.activeTraits && sc.activeTraits.length > 0)
+            ? sc.activeTraits.length * (fs + 2) + 2 : 0;
+          const lx0 = goRight ? screenX + gap + tBlockW : screenX - gap - textW;
+          const lx1 = goRight ? screenX + gap + tBlockW + textW : screenX - gap;
           if (ex >= lx0 && ex <= lx1 && ey >= screenY - fs / 2 - 2 && ey <= screenY + fs / 2 + 2) {
             hit = ni.id; break;
           }

@@ -1,6 +1,32 @@
 PHYLO VIEWER — PATCH NOTES
 ==========================
 
+[v0.2] — 2026-04-23
+--------------------
+- Added "What's new in v0.2" welcome modal (shown once per version, localStorage-gated)
+- Added "How to Cite" button with APA and BibTeX citation entries (Copy buttons included)
+- Added Lineages Through Time (LTT) plot (LTT Plot button, visible when tree has branch lengths)
+  - Step-function plot: X = time from root, Y = lineage count (log scale)
+  - Opens in a modal; handles polytomies and non-ultrametric trees
+- Renamed "Radial" layout button to "Radial (Beta)"
+- Arrow keys (↑ ↓ ← →) now pan the canvas view
+- Tip rename: selecting a leaf in the Clade tab shows a rename input field
+- Added trait data visualisation (third sidebar tab: Traits)
+  - Trait squares appear between the tip node and tip label; labels dynamically
+    shift right based on the number of active traits
+  - Upload a CSV file (tip names in column 1, traits in remaining columns)
+  - Numeric columns auto-detected as continuous (Viridis gradient)
+  - Text columns auto-detected as discrete (categorical colour palette)
+  - Toggle each trait on/off; colour legend shown per trait
+  - Missing data / NA cells rendered as grey squares, never crash
+  - Rectangular layout: coloured squares next to each tip label
+  - Radial layout: tip node dots coloured by first active trait
+  - Shows matched vs total tip count after upload
+- Added Weight slider to scale branch line width and node dot size together
+- Colour-coded Branch Info panel: branch length in orange, clade stats in blue
+- Paraphyletic group panel now shows MRCA node height alongside Phylogenetic Diversity
+
+
 [v0.1.2] — 2026-04-23
 ----------------------
 - Added "See Source" button (visible when a tree is loaded)

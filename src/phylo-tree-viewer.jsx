@@ -231,6 +231,12 @@ export default function App() {
   const [feedbackType, setFeedbackType] = useState("bug");
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [feedbackStatus, setFeedbackStatus] = useState("idle"); // idle | sending | success | error
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceText, setSourceText] = useState("");
+
+  const openSource = function() { setSourceText(treeData ? toNewick(treeData) + ";" : ""); setSourceOpen(true); };
+  const closeSource = function() { setSourceOpen(false); };
+  const confirmSource = function() { loadTree(sourceText); setSourceOpen(false); };
 
   // Paste your Formspree endpoint here after creating a form at formspree.io
   const FORMSPREE_ENDPOINT = "https://formspree.io/f/xgorpzja";
@@ -791,6 +797,7 @@ export default function App() {
             </button>
             <button style={btn("ghost")} onClick={undo} disabled={history.length === 0}>Undo</button>
             <button style={btn("ghost")} onClick={exportNewick}>Export .nwk</button>
+            <button style={btn("ghost")} onClick={openSource}>See Source</button>
             <div style={divider} />
             <button style={btn(flipAxis ? "active" : "ghost")} onClick={function() { setFlipAxis(function(f) { return !f; }); }}>⇄ Time before present</button>
             <button style={btn(showLabels ? "active" : "ghost")} onClick={function() { setShowLabels(function(s) { return !s; }); }}>Labels {showLabels ? "on" : "off"}</button>
@@ -1113,6 +1120,28 @@ export default function App() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {sourceOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}
+          onClick={function(e) { if (e.target === e.currentTarget) closeSource(); }}>
+          <div style={{ background: "#fff", borderRadius: 10, padding: 28, maxWidth: 560, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>Newick source</div>
+              <button onClick={closeSource} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
+            </div>
+            <textarea value={sourceText} onChange={function(e) { setSourceText(e.target.value); }}
+              rows={10}
+              style={{ width: "100%", padding: "10px 12px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.6 }} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+              <button style={btn("secondary")} onClick={function() { navigator.clipboard.writeText(sourceText); }}>Copy</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={btn("secondary")} onClick={closeSource}>Cancel</button>
+                <button style={btn("primary")} onClick={confirmSource}>Confirm</button>
+              </div>
+            </div>
           </div>
         </div>
       )}

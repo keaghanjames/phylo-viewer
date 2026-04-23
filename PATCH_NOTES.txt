@@ -1,8 +1,12 @@
 PHYLO VIEWER — PATCH NOTES
 ==========================
 
-[dev] — in progress
---------------------
+[v0.1.2] — 2026-04-23
+----------------------
+- Added "See Source" button (visible when a tree is loaded)
+  - Opens a modal showing the full Newick string for the current tree
+  - User can edit the text directly and hit Confirm to reload the tree
+  - Includes a Copy button for quickly grabbing the Newick string
 - Fixed: switching between Rectangular and Radial layouts now resets the
   canvas to the centred position (previously the old pan/zoom offset was
   kept, which could leave the tree off-screen)

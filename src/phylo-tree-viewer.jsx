@@ -1592,6 +1592,7 @@ export default function App() {
                 { bold: "Line weight slider", text: " — scale branch widths and node dot sizes together with a single slider" },
                 { bold: "Colour-coded branch info", text: " — branch length shown in orange, clade statistics in blue, matching the tree highlight colours" },
                 { bold: "MRCA height for paraphyletic groups", text: " — the height of the most recent common ancestor is now shown alongside Phylogenetic Diversity" },
+                { bold: "Extract selected tips", text: " — a new button in the paraphyletic group panel keeps only the selected tips and prunes everything else" },
               ].map(function(item, i) {
                 return (
                   <li key={i} style={{ fontSize: 13, color: "#374151", lineHeight: 1.55 }}>

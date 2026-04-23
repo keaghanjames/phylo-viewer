@@ -207,6 +207,46 @@ function sumEdgeLengths(root, edgeIds) {
   return total;
 }
 
+function parseNexusToNewick(text) {
+  if (!/^#NEXUS/i.test(text.trim())) return null;
+
+  // Find the TREES block
+  const treesMatch = text.match(/BEGIN\s+TREES\s*;([\s\S]*?)END\s*;/i);
+  if (!treesMatch) return null;
+  const treesBlock = treesMatch[1];
+
+  // Parse TRANSLATE table (maps short keys → full taxon names)
+  const translateMap = {};
+  const transMatch = treesBlock.match(/TRANSLATE\s+([\s\S]*?)\s*;/i);
+  if (transMatch) {
+    transMatch[1].split(',').forEach(function(entry) {
+      const m = entry.trim().match(/^(\S+)\s+([\s\S]+)$/);
+      if (m) translateMap[m[1].trim()] = m[2].trim().replace(/^['"]|['"]$/g, '');
+    });
+  }
+
+  // Find first TREE statement: TREE [*] name = [comment] newick;
+  const treeMatch = treesBlock.match(/TREE\s+(?:\*\s*)?\S+\s*=\s*([\s\S]+?)\s*;/i);
+  if (!treeMatch) return null;
+
+  // Strip inline comments/annotations: [...]
+  let newick = treeMatch[1].replace(/\[.*?\]/g, '').trim();
+
+  // Apply translate by walking the parsed tree and substituting node names
+  if (Object.keys(translateMap).length > 0) {
+    const tree = parseNewick(newick);
+    if (!tree) return null;
+    function applyTrans(n) {
+      if (n.name && translateMap[n.name] !== undefined) n.name = translateMap[n.name];
+      if (n.children) n.children.forEach(applyTrans);
+    }
+    applyTrans(tree);
+    return toNewick(tree) + ";";
+  }
+
+  return newick.endsWith(';') ? newick : newick + ';';
+}
+
 function computeLTT(root) {
   var events = [];
   function walk(n, d) {
@@ -397,7 +437,13 @@ export default function App() {
   const pushHistory = function(t) { setHistory(function(h) { return h.slice(-20).concat([t]); }); };
 
   const loadTree = function(str) {
-    const parsed = parseNewick(str);
+    let src = str.trim();
+    if (/^#NEXUS/i.test(src)) {
+      const converted = parseNexusToNewick(src);
+      if (!converted) { setError("Could not parse NEXUS file — no valid TREE block found."); return; }
+      src = converted;
+    }
+    const parsed = parseNewick(src);
     if (!parsed) { setError("Invalid Newick format."); return; }
     setError("");
     assignIds(parsed);
@@ -993,8 +1039,8 @@ export default function App() {
         <img src="/phylo-viewer/favicon.svg" alt="" style={{ width: 22, height: 22, flexShrink: 0 }} />
         <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", marginRight: 4 }}>Phylo Viewer <span style={{ fontWeight: 400, color: "#9ca3af" }}>v0.2</span></span>
         <label style={btn("secondary")}>
-          Upload .nwk / .tre
-          <input type="file" accept=".nwk,.txt,.tree,.tre" onChange={handleFile} style={{ display: "none" }} />
+          Upload .nwk / .nex / .tre
+          <input type="file" accept=".nwk,.txt,.tree,.tre,.nex,.nexus,.nxs" onChange={handleFile} style={{ display: "none" }} />
         </label>
         <button style={btn("ghost")} onClick={function() { setNewickInput(sampleNewick); loadTree(sampleNewick); }}>Demo Tree</button>
         <button style={btn("ghost")} onClick={openFeedback}>Feedback</button>
@@ -1040,7 +1086,7 @@ export default function App() {
       {!treeData && (
         <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "flex-start" }}>
           <textarea value={newickInput} onChange={function(e) { setNewickInput(e.target.value); }}
-            placeholder="Paste Newick string here… e.g. ((A,B),C);"
+            placeholder="Paste Newick or NEXUS string here… e.g. ((A,B),C);"
             style={{ flex: 1, height: 80, padding: 10, border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, fontFamily: "monospace", resize: "vertical" }} />
           <button style={btn("primary")} onClick={function() { loadTree(newickInput); }}>Load</button>
         </div>
@@ -1364,7 +1410,7 @@ export default function App() {
       {!treeData && (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 40 }}>🌿</div>
-          <div style={{ fontSize: 14 }}>Upload a .nwk / .tre file or paste a Newick string to get started</div>
+          <div style={{ fontSize: 14 }}>Upload a .nwk / .nex / .tre file or paste a Newick or NEXUS string to get started</div>
         </div>
       )}
 

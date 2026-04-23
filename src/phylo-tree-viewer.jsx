@@ -487,6 +487,34 @@ export default function App() {
     a.href = URL.createObjectURL(blob); a.download = "tree.nwk"; a.click();
   };
 
+  const extractMultiTips = function() {
+    if (!treeData || multiSelected.size === 0) return;
+    const leafIdsToKeep = new Set();
+    multiSelected.forEach(function(id) {
+      const n = findNode(treeData, id);
+      if (!n) return;
+      if (!n.children || !n.children.length) leafIdsToKeep.add(id);
+      else getLeafIds(n).forEach(function(lid) { leafIdsToKeep.add(lid); });
+    });
+    if (leafIdsToKeep.size === 0) return;
+    const t = cloneTree(treeData);
+    function pruneTo(n) {
+      if (!n.children || !n.children.length) return leafIdsToKeep.has(n._id) ? n : null;
+      n.children = n.children.map(pruneTo).filter(Boolean);
+      if (n.children.length === 0) return null;
+      if (n.children.length === 1) {
+        const child = n.children[0];
+        child.length = (child.length || 0) + (n.length || 0);
+        return child;
+      }
+      return n;
+    }
+    const pruned = pruneTo(t);
+    if (!pruned) return;
+    setMultiSelected(new Set());
+    applyEdit(pruned);
+  };
+
   const deleteMultiTips = function() {
     if (!treeData) return;
     const leafIdsToDelete = new Set();
@@ -1082,6 +1110,10 @@ export default function App() {
                       const mrcaId = findMRCA(treeData, multiSelected);
                       if (mrcaId != null) { setSelectedId(mrcaId); setMultiSelected(new Set()); }
                     }}>Select Monophyly</button>
+                    <button style={Object.assign({}, btn("ghost", true), { color: "#7c3aed", marginTop: 4 })}
+                      onClick={extractMultiTips}>
+                      Extract selected tips
+                    </button>
                     <button style={Object.assign({}, btn("primary", true), { marginTop: 6, background: "#dc2626", borderColor: "#dc2626", fontWeight: 700 })}
                       onClick={function() { setDeleteConfirm(true); }}>
                       Delete Tips

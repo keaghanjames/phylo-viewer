@@ -1,6 +1,19 @@
 PHYLO VIEWER — PATCH NOTES
 ==========================
 
+[dev] — in progress
+--------------------
+- Added trait data visualisation (third sidebar tab: Traits)
+  - Upload a CSV file (tip names in column 1, traits in remaining columns)
+  - Numeric columns auto-detected as continuous (Viridis gradient)
+  - Text columns auto-detected as discrete (categorical colour palette)
+  - Toggle each trait on/off; colour legend shown per trait
+  - Missing data / NA cells rendered as grey squares, never crash
+  - Rectangular layout: coloured squares next to each tip label
+  - Radial layout: tip node dots coloured by first active trait
+  - Shows matched vs total tip count after upload
+
+
 [v0.1.2] — 2026-04-23
 ----------------------
 - Added "See Source" button (visible when a tree is loaded)

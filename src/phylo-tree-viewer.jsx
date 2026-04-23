@@ -207,6 +207,65 @@ function sumEdgeLengths(root, edgeIds) {
   return total;
 }
 
+// ── Trait data utilities ──────────────────────────────────────────────────────
+
+function parseCSVRow(line) {
+  const result = []; let cur = "", inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"') { inQuote = !inQuote; }
+    else if (line[i] === ',' && !inQuote) { result.push(cur.trim()); cur = ""; }
+    else { cur += line[i]; }
+  }
+  result.push(cur.trim()); return result;
+}
+
+function parseTraitCSV(text) {
+  const lines = text.trim().split(/\r?\n/).filter(function(l) { return l.trim(); });
+  if (lines.length < 2) return null;
+  const headers = parseCSVRow(lines[0]);
+  if (headers.length < 2) return null;
+  const traitCols = headers.slice(1);
+  const rows = {};
+  for (let i = 1; i < lines.length; i++) {
+    const vals = parseCSVRow(lines[i]);
+    const tipName = vals[0]; if (!tipName) continue;
+    const traitVals = {};
+    traitCols.forEach(function(col, j) {
+      const v = vals[j + 1];
+      const isNA = v === undefined || v === "" || /^(NA|na|N\/A|n\/a|null|NULL|-)$/.test(v);
+      traitVals[col] = isNA ? null : v;
+    });
+    rows[tipName] = traitVals;
+  }
+  return { traitCols, rows };
+}
+
+const TRAIT_PALETTE = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f","#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac"];
+
+function computeTraitMeta(traitCols, rows) {
+  const meta = {};
+  traitCols.forEach(function(col) {
+    const values = Object.values(rows).map(function(r) { return r[col]; }).filter(function(v) { return v !== null; });
+    const nums = values.map(Number);
+    const isContinuous = values.length > 0 && nums.every(function(n) { return !isNaN(n); });
+    if (isContinuous) {
+      const min = Math.min.apply(null, nums), max = Math.max.apply(null, nums);
+      meta[col] = { type: "continuous", min, max,
+        colorFn: function(v) { if (v === null) return null; const t = max === min ? 0.5 : (Number(v) - min) / (max - min); return d3.interpolateViridis(t); }
+      };
+    } else {
+      const categories = []; values.forEach(function(v) { if (!categories.includes(v)) categories.push(v); }); categories.sort();
+      const colorMap = {}; categories.forEach(function(cat, i) { colorMap[cat] = TRAIT_PALETTE[i % TRAIT_PALETTE.length]; });
+      meta[col] = { type: "discrete", categories, colorMap,
+        colorFn: function(v) { return v === null ? null : (colorMap[v] || "#9ca3af"); }
+      };
+    }
+  });
+  return meta;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [treeData, setTreeData] = useState(null);
   const [history, setHistory] = useState([]);
@@ -231,12 +290,38 @@ export default function App() {
   const [feedbackType, setFeedbackType] = useState("bug");
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [feedbackStatus, setFeedbackStatus] = useState("idle"); // idle | sending | success | error
+  const [traitData, setTraitData] = useState(null);
+  const [traitMeta, setTraitMeta] = useState({});
+  const [traitNames, setTraitNames] = useState([]);
+  const [activeTraits, setActiveTraits] = useState([]);
+  const [traitMatchCount, setTraitMatchCount] = useState({ matched: 0, total: 0 });
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
 
   const openSource = function() { setSourceText(treeData ? toNewick(treeData) + ";" : ""); setSourceOpen(true); };
   const closeSource = function() { setSourceOpen(false); };
   const confirmSource = function() { loadTree(sourceText); setSourceOpen(false); };
+
+  const handleTraitFile = function(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const parsed = parseTraitCSV(ev.target.result);
+      if (!parsed) return;
+      const { traitCols, rows } = parsed;
+      const meta = computeTraitMeta(traitCols, rows);
+      setTraitData(rows); setTraitMeta(meta); setTraitNames(traitCols);
+      setActiveTraits(traitCols.slice(0, 5));
+      if (treeData) {
+        const leafNames = getLeafNames(treeData);
+        setTraitMatchCount({ matched: leafNames.filter(function(n) { return rows[n] !== undefined; }).length, total: leafNames.length });
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const clearTraits = function() { setTraitData(null); setTraitMeta({}); setTraitNames([]); setActiveTraits([]); setTraitMatchCount({ matched: 0, total: 0 }); };
 
   // Paste your Formspree endpoint here after creating a form at formspree.io
   const FORMSPREE_ENDPOINT = "https://formspree.io/f/xgorpzja";
@@ -497,11 +582,20 @@ export default function App() {
       const isMultiSel = ms.has(ni.id);
       const isConn = connectingBranches.has(ni.id) && !isMultiSel;
 
+      // Trait colour for leaf nodes in radial view (first active trait)
+      let traitNodeColor = null;
+      if (ni.isLeaf && scLayout === "radial" && scene.activeTraits && scene.activeTraits.length > 0) {
+        const tm = scene.traitMeta[scene.activeTraits[0]];
+        const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][scene.activeTraits[0]] : null;
+        if (tm && tv !== null) traitNodeColor = tm.colorFn(tv);
+      }
+
       ctx.beginPath();
       ctx.arc(screenX, screenY, (ni.selected || isMatch || isFocus || isMultiSel) ? 5 : circleR, 0, 2 * Math.PI);
       ctx.fillStyle = ni.selected ? "#2563eb" : isFocus ? "#dc2626" : isMatch ? "#ef4444"
         : isMultiSel ? "#7c3aed" : isConn ? "#a78bfa" : inClade ? "#93c5fd"
-        : ni.collapsed ? "#f59e0b" : ni.isLeaf ? "#374151" : "#9ca3af";
+        : ni.collapsed ? "#f59e0b"
+        : (traitNodeColor || (ni.isLeaf ? "#374151" : "#9ca3af"));
       ctx.fill();
       ctx.strokeStyle = (isFocus || isMultiSel) ? "#fff" : ni.selected ? "#1d4ed8" : "#fff";
       ctx.lineWidth = (isFocus || isMultiSel) ? 2 : 1.2;
@@ -524,6 +618,26 @@ export default function App() {
         }
         ctx.fillStyle = isFocus ? "#dc2626" : isMatch ? "#ef4444" : isMultiSel ? "#7c3aed" : inClade ? "#1d4ed8" : "#374151";
         ctx.fillText(label, lx, screenY);
+      }
+
+      // Trait squares — rectangular layout only, leaf nodes only
+      if (ni.isLeaf && scLayout === "rectangular" && scene.activeTraits && scene.activeTraits.length > 0) {
+        const sqSz = scene.fontSize;
+        const sqPad = 2;
+        ctx.font = scene.fontSize + "px system-ui, sans-serif";
+        const labelW = (showLbls && ni.name) ? ctx.measureText(ni.collapsed ? "[" + (ni.name || "clade") + " ►]" : ni.name).width : 0;
+        const sqStart = screenX + gap + labelW + (labelW > 0 ? 6 : 0);
+        scene.activeTraits.forEach(function(traitName, ti) {
+          const tm = scene.traitMeta[traitName]; if (!tm) return;
+          const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][traitName] : null;
+          const color = tv !== null ? tm.colorFn(tv) : null;
+          const x = sqStart + ti * (sqSz + sqPad);
+          ctx.fillStyle = color || "#e5e7eb";
+          ctx.fillRect(x, screenY - sqSz / 2, sqSz, sqSz);
+          ctx.strokeStyle = "rgba(0,0,0,0.1)";
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(x, screenY - sqSz / 2, sqSz, sqSz);
+        });
       }
     });
 
@@ -632,7 +746,7 @@ export default function App() {
       });
     }
 
-    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches };
+    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches, traitData, traitMeta, activeTraits };
     nodesRef.current = nodes;
     nodes.forEach(function(n) { nodePositionMapRef.current[n.id] = { localX: n.localX, localY: n.localY }; });
 
@@ -768,6 +882,15 @@ export default function App() {
     if (sceneRef.current) scheduleRender(zoomTransformRef.current);
   }, [searchQuery, searchFocusId, cladeFocusId]);
 
+  useEffect(function() {
+    if (sceneRef.current) {
+      sceneRef.current.traitData = traitData;
+      sceneRef.current.traitMeta = traitMeta;
+      sceneRef.current.activeTraits = activeTraits;
+      scheduleRender(zoomTransformRef.current);
+    }
+  }, [traitData, traitMeta, activeTraits]);
+
   const selectedNode = selectedId != null && treeData ? findNode(treeData, selectedId) : null;
   const multiNodes = treeData ? Array.from(multiSelected).map(function(id) { return findNode(treeData, id); }).filter(Boolean) : [];
 
@@ -831,15 +954,15 @@ export default function App() {
 
           <div style={{ width: 240, borderLeft: "1px solid #e5e7eb", background: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
             <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
-              {["clade", "search"].map(function(p) {
+              {["clade", "search", "traits"].map(function(p) {
                 return (
                   <button key={p} onClick={function() { setActivePanel(p); }} style={{
-                    flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer",
+                    flex: 1, padding: "8px 0", fontSize: 11, fontWeight: 500, border: "none", cursor: "pointer",
                     background: activePanel === p ? "#fff" : "#f9fafb",
                     color: activePanel === p ? "#111827" : "#6b7280",
                     borderBottom: activePanel === p ? "2px solid #111827" : "2px solid transparent",
                   }}>
-                    {p === "clade" ? "Clade" : "Search"}
+                    {p === "clade" ? "Clade" : p === "search" ? "Search" : "Traits"}
                   </button>
                 );
               })}
@@ -1033,6 +1156,83 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {activePanel === "traits" && (
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+                <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6" }}>
+                  <label style={Object.assign({}, btn("secondary"), { display: "block", textAlign: "center", cursor: "pointer" })}>
+                    Upload trait CSV
+                    <input type="file" accept=".csv,.txt,.tsv" onChange={handleTraitFile} style={{ display: "none" }} />
+                  </label>
+                  <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6, lineHeight: 1.5 }}>
+                    First column: tip names. Remaining columns: traits. Numeric columns are treated as continuous, text as discrete. Empty cells / NA are shown in grey.
+                  </div>
+                </div>
+
+                {traitNames.length === 0 && (
+                  <div style={{ padding: 14, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>
+                    Upload a CSV to visualise trait data alongside the tree.
+                  </div>
+                )}
+
+                {traitNames.length > 0 && (
+                  <>
+                    <div style={{ padding: "6px 12px", borderBottom: "1px solid #f3f4f6", fontSize: 11, color: "#6b7280" }}>
+                      {traitMatchCount.matched} / {traitMatchCount.total} tips matched
+                    </div>
+                    <div style={{ flex: 1, overflowY: "auto" }}>
+                      {traitNames.map(function(name) {
+                        const meta = traitMeta[name]; if (!meta) return null;
+                        const isActive = activeTraits.includes(name);
+                        return (
+                          <div key={name} style={{ padding: "10px 12px", borderBottom: "1px solid #f9fafb", opacity: isActive ? 1 : 0.5 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+                              <input type="checkbox" checked={isActive} onChange={function() {
+                                setActiveTraits(function(prev) { return prev.includes(name) ? prev.filter(function(t) { return t !== name; }) : prev.concat([name]); });
+                              }} style={{ cursor: "pointer", accentColor: "#374151", flexShrink: 0 }} />
+                              <span style={{ fontSize: 11, fontWeight: 600, color: "#111827", fontFamily: "monospace", flex: 1, wordBreak: "break-all" }}>{name}</span>
+                              <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, flexShrink: 0,
+                                background: meta.type === "continuous" ? "#dbeafe" : "#f0fdf4",
+                                color: meta.type === "continuous" ? "#1d4ed8" : "#15803d" }}>
+                                {meta.type === "continuous" ? "cont." : "disc."}
+                              </span>
+                            </div>
+                            {meta.type === "continuous" && (
+                              <div style={{ marginLeft: 22 }}>
+                                <div style={{ height: 7, borderRadius: 3, marginBottom: 2,
+                                  background: "linear-gradient(to right, " + d3.interpolateViridis(0) + ", " + d3.interpolateViridis(0.5) + ", " + d3.interpolateViridis(1) + ")" }} />
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#9ca3af" }}>
+                                  <span>{Number(meta.min.toPrecision(4))}</span>
+                                  <span>{Number(meta.max.toPrecision(4))}</span>
+                                </div>
+                              </div>
+                            )}
+                            {meta.type === "discrete" && (
+                              <div style={{ marginLeft: 22, display: "flex", flexDirection: "column", gap: 2 }}>
+                                {meta.categories.slice(0, 8).map(function(cat) {
+                                  return (
+                                    <div key={cat} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                      <div style={{ width: 10, height: 10, borderRadius: 2, background: meta.colorMap[cat], flexShrink: 0 }} />
+                                      <span style={{ fontSize: 11, fontFamily: "monospace", color: "#374151", wordBreak: "break-all" }}>{cat}</span>
+                                    </div>
+                                  );
+                                })}
+                                {meta.categories.length > 8 && (
+                                  <span style={{ fontSize: 10, color: "#9ca3af" }}>+{meta.categories.length - 8} more categories</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ padding: 10, borderTop: "1px solid #f3f4f6" }}>
+                      <button style={Object.assign({}, btn("ghost"), { width: "100%", fontSize: 11, color: "#dc2626" })} onClick={clearTraits}>Clear trait data</button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

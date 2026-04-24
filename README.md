@@ -1,8 +1,8 @@
-# Phylo Viewer
+# phyloScope
 
 An interactive phylogenetic tree viewer that runs entirely in the browser. Load a Newick-format tree file, explore it visually, and perform common tree editing operations — all without installing any software or sending your data to a server.
 
-**Live app:** https://keaghanjames.github.io/phylo-viewer/
+**Live app:** https://keaghanjames.github.io/phyloscope/
 
 ## Features
 

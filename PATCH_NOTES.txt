@@ -1,5 +1,5 @@
-PHYLO VIEWER — PATCH NOTES
-==========================
+PHYLOSCOPE — PATCH NOTES
+========================
 
 [v0.2] — 2026-04-23
 --------------------
@@ -60,7 +60,7 @@ PHYLO VIEWER — PATCH NOTES
 ----------------------
 - Initial release
 - Vite + React + D3 project scaffolded and deployed to GitHub Pages
-  at https://keaghanjames.github.io/phylo-viewer/
+  at https://keaghanjames.github.io/phyloscope/
 - Core phylogenetic tree viewer features:
   - Load trees from .nwk / .tre files or paste Newick string directly
   - Rectangular and radial layouts

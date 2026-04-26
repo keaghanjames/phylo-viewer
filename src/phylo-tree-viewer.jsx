@@ -1,32 +1,71 @@
 import { useState, useEffect, useRef } from "react";
 import * as d3 from "d3";
 
+function parseAnnotationContent(str) {
+  const result = {};
+  let j = 0;
+  while (j < str.length) {
+    let key = "";
+    while (j < str.length && str[j] !== "=") key += str[j++];
+    if (j >= str.length || !key.trim()) break;
+    j++;
+    let val = "";
+    if (j < str.length && str[j] === "{") {
+      while (j < str.length && str[j] !== "}") val += str[j++];
+      val += "}"; if (j < str.length) j++;
+    } else if (j < str.length && str[j] === '"') {
+      j++;
+      while (j < str.length && str[j] !== '"') val += str[j++];
+      if (j < str.length) j++;
+    } else {
+      while (j < str.length && str[j] !== ",") val += str[j++];
+    }
+    if (key.trim()) result[key.trim()] = val.trim();
+    if (j < str.length && str[j] === ",") j++;
+  }
+  return result;
+}
+
 function parseNewick(s) {
   s = s.trim().replace(/;$/, "");
   let i = 0;
+  function parseAnnotation() {
+    if (s[i] !== "[") return null;
+    i++;
+    let content = "";
+    while (i < s.length && s[i] !== "]") content += s[i++];
+    if (i < s.length) i++;
+    if (!content.startsWith("&")) return null;
+    return parseAnnotationContent(content.slice(1));
+  }
   function parseNode() {
-    let node = { name: "", length: null, children: [] };
+    let node = { name: "", length: null, children: [], annotations: null };
     if (s[i] === "(") {
       i++; node.children.push(parseNode());
       while (s[i] === ",") { i++; node.children.push(parseNode()); }
       i++;
     }
     let label = "";
-    while (i < s.length && !":,()".includes(s[i])) label += s[i++];
+    while (i < s.length && !":,()[".includes(s[i])) label += s[i++];
     node.name = label.trim();
+    if (s[i] === "[") { const ann = parseAnnotation(); if (ann) node.annotations = ann; }
     if (s[i] === ":") {
       i++; let len = "";
-      while (i < s.length && !",()".includes(s[i])) len += s[i++];
+      while (i < s.length && !",()[".includes(s[i])) len += s[i++];
       node.length = parseFloat(len);
     }
+    if (s[i] === "[") { const ann = parseAnnotation(); if (ann) node.annotations = Object.assign(node.annotations || {}, ann); }
     return node;
   }
   try { return parseNode(); } catch(e) { return null; }
 }
 
 function toNewick(n) {
-  if (!n.children || !n.children.length) return n.name + (n.length != null ? ":" + n.length : "");
-  return "(" + n.children.map(toNewick).join(",") + ")" + (n.name || "") + (n.length != null ? ":" + n.length : "");
+  const ann = n.annotations && Object.keys(n.annotations).length > 0
+    ? "[&" + Object.entries(n.annotations).map(function(e) { return e[0] + "=" + e[1]; }).join(",") + "]"
+    : "";
+  if (!n.children || !n.children.length) return n.name + ann + (n.length != null ? ":" + n.length : "");
+  return "(" + n.children.map(toNewick).join(",") + ")" + (n.name || "") + ann + (n.length != null ? ":" + n.length : "");
 }
 
 function cloneTree(n) { return JSON.parse(JSON.stringify(n)); }
@@ -229,8 +268,8 @@ function parseNexusToNewick(text) {
   const treeMatch = treesBlock.match(/TREE\s+(?:\*\s*)?\S+\s*=\s*([\s\S]+?)\s*;/i);
   if (!treeMatch) return null;
 
-  // Strip inline comments/annotations: [...]
-  let newick = treeMatch[1].replace(/\[.*?\]/g, '').trim();
+  // Strip plain [comments] but preserve BEAST [&annotations]
+  let newick = treeMatch[1].replace(/\[(?!&)[^\]]*\]/g, '').trim();
 
   // Apply translate by walking the parsed tree and substituting node names
   if (Object.keys(translateMap).length > 0) {
@@ -270,6 +309,32 @@ function computeLTT(root) {
   pts.push({ t: computeMaxDepth(root, 0), n: lineages });
   return pts;
 }
+
+function getAnnotationKeys(root) {
+  const keys = new Set();
+  function walk(n) {
+    if (n.children && n.children.length) {
+      if (n.annotations) Object.keys(n.annotations).forEach(function(k) { keys.add(k); });
+      n.children.forEach(walk);
+    }
+  }
+  walk(root);
+  return Array.from(keys);
+}
+
+function hasInternalNodeLabels(root) {
+  if (!root.children || !root.children.length) return false;
+  if (root.name && root.name.trim()) return true;
+  return root.children.some(hasInternalNodeLabels);
+}
+
+const NOTE_COLORS = [
+  { fill: "#fef9c3", border: "#d97706", text: "#78350f" }, // amber
+  { fill: "#dcfce7", border: "#16a34a", text: "#14532d" }, // green
+  { fill: "#dbeafe", border: "#2563eb", text: "#1e3a8a" }, // blue
+  { fill: "#fce7f3", border: "#db2777", text: "#831843" }, // pink
+  { fill: "#ede9fe", border: "#7c3aed", text: "#3b0764" }, // purple
+];
 
 // ── Trait data utilities ──────────────────────────────────────────────────────
 
@@ -365,9 +430,22 @@ export default function App() {
   const [renameValue, setRenameValue] = useState("");
   const [lttOpen, setLttOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(function() {
-    return localStorage.getItem("phylo_seen_whats_new") !== "v0.2";
+    return localStorage.getItem("phylo_seen_whats_new") !== "v0.3";
   });
   const [citeOpen, setCiteOpen] = useState(false);
+  const [showNodeHeights, setShowNodeHeights] = useState(false);
+  const [nodeHeightMode, setNodeHeightMode] = useState("from_root");
+  const [showNodeLabels, setShowNodeLabels] = useState(false);
+  const [activeNodeAnnotations, setActiveNodeAnnotations] = useState([]);
+  const [nodeLabelFontSize, setNodeLabelFontSize] = useState(9);
+  const [treeAnnotationKeys, setTreeAnnotationKeys] = useState([]);
+  const [treeHasInternalLabels, setTreeHasInternalLabels] = useState(false);
+  const [userAnnotations, setUserAnnotations] = useState({});
+  const [showUserAnnotations, setShowUserAnnotations] = useState(true);
+  const [noteInput, setNoteInput] = useState("");
+  const [noteColorIdx, setNoteColorIdx] = useState(0);
+  const [noteExpanded, setNoteExpanded] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   const openSource = function() { setSourceText(treeData ? toNewick(treeData) + ";" : ""); setSourceOpen(true); };
   const closeSource = function() { setSourceOpen(false); };
@@ -428,7 +506,7 @@ export default function App() {
   const selectedIdRef = useRef(null);
   const multiSelectedRef = useRef(new Set());
 
-  const sampleNewick = "((((Homo_sapiens:0.007,Pan_troglodytes:0.007):0.003,Gorilla_gorilla:0.01):0.008,Pongo_pygmaeus:0.018):0.012,Macaca_mulatta:0.03);";
+  const sampleNewick = "((((Homo_sapiens:0.007,Pan_troglodytes:0.007)100:0.003,Gorilla_gorilla:0.01)98:0.008,Pongo_pygmaeus:0.018)95:0.012,Macaca_mulatta:0.03)100;";
 
   useEffect(function() { treeDataRef.current = treeData; }, [treeData]);
   useEffect(function() { selectedIdRef.current = selectedId; }, [selectedId]);
@@ -448,6 +526,13 @@ export default function App() {
     setError("");
     assignIds(parsed);
     setLeafCount(countLeaves(parsed));
+    setTreeAnnotationKeys(getAnnotationKeys(parsed));
+    setTreeHasInternalLabels(hasInternalNodeLabels(parsed));
+    setActiveNodeAnnotations([]);
+    setShowNodeHeights(false);
+    setShowNodeLabels(false);
+    setUserAnnotations({});
+    setNoteInput("");
     setTreeData(parsed);
     setHistory([]);
     setSelectedId(null);
@@ -526,11 +611,45 @@ export default function App() {
     setRenameValue("");
   };
 
-  const exportNewick = function() {
-    if (!treeData) return;
-    const blob = new Blob([toNewick(treeData) + ";"], { type: "text/plain" });
+  const doExport = function(includeNotes) {
+    setExportDialogOpen(false);
+    let tree = treeData;
+    if (includeNotes && Object.keys(userAnnotations).length > 0) {
+      tree = cloneTree(treeData);
+      function applyNotes(n) {
+        const ann = userAnnotations[n._id];
+        if (ann) n.annotations = Object.assign({}, n.annotations || {}, { note: '"' + ann.text.replace(/"/g, "'") + '"' });
+        if (n.children) n.children.forEach(applyNotes);
+      }
+      applyNotes(tree);
+    }
+    const blob = new Blob([toNewick(tree) + ";"], { type: "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "tree.nwk"; a.click();
+  };
+
+  const exportNewick = function() {
+    if (!treeData) return;
+    if (Object.keys(userAnnotations).length > 0) { setExportDialogOpen(true); return; }
+    doExport(false);
+  };
+
+  const saveNote = function() {
+    if (selectedId == null) return;
+    const trimmed = noteInput.trim();
+    setUserAnnotations(function(prev) {
+      const next = Object.assign({}, prev);
+      if (trimmed) next[selectedId] = { text: trimmed, colorIdx: noteColorIdx };
+      else delete next[selectedId];
+      return next;
+    });
+  };
+
+  const deleteNote = function() {
+    if (selectedId == null) return;
+    setUserAnnotations(function(prev) { const next = Object.assign({}, prev); delete next[selectedId]; return next; });
+    setNoteInput("");
+    setNoteColorIdx(0);
   };
 
   const extractMultiTips = function() {
@@ -738,7 +857,8 @@ export default function App() {
         });
       }
 
-      if ((showLbls || isMatch || isFocus || isMultiSel) && (ni.name || ni.collapsed)) {
+      const showThisName = ni.isLeaf || ni.collapsed || (scene.showNodeLabels && !ni.isLeaf);
+      if ((showLbls || isMatch || isFocus || isMultiSel) && showThisName && (ni.name || ni.collapsed)) {
         const label = ni.collapsed ? "[" + (ni.name || "clade") + " ►]" : ni.name || "";
         const goRight = scLayout === "radial" ? (ni.angle < Math.PI) === ni.isLeaf : ni.isLeaf;
         const lx = screenX + (goRight ? gap + traitBlockW : -gap);
@@ -755,6 +875,108 @@ export default function App() {
         }
         ctx.fillStyle = isFocus ? "#dc2626" : isMatch ? "#ef4444" : isMultiSel ? "#7c3aed" : inClade ? "#1d4ed8" : "#374151";
         ctx.fillText(label, lx, screenY);
+      }
+
+      // Node label (height / support / annotations) — internal nodes only
+      if (!ni.isLeaf) {
+        const nlParts = [];
+        if (scene.showNodeHeights && scene.hasBL) {
+          const raw = ni.depthFromRoot || 0;
+          const disp = scene.nodeHeightMode === "before_present" ? scene.maxDepth - raw : raw;
+          nlParts.push(+disp.toPrecision(4));
+        }
+        if (scene.activeNodeAnnotations && scene.activeNodeAnnotations.length > 0 && ni.annotations) {
+          scene.activeNodeAnnotations.forEach(function(key) {
+            const v = ni.annotations[key];
+            if (v !== undefined && v !== null && v !== "") nlParts.push(v);
+          });
+        }
+        if (nlParts.length > 0) {
+          const nlabel = nlParts.join(" | ");
+          ctx.save();
+          ctx.font = scene.fontSize + "px system-ui, sans-serif";
+          ctx.fillStyle = "#6b7280";
+          ctx.textBaseline = "bottom";
+          if (scLayout === "rectangular") {
+            ctx.textAlign = "left";
+            ctx.fillText(nlabel, screenX + circleR + 2, screenY - 1);
+          } else {
+            ctx.textAlign = "center";
+            ctx.fillText(nlabel, screenX, screenY - circleR - 2);
+          }
+          ctx.restore();
+        }
+      }
+
+      // User annotation sticky-note box
+      if (scene.showUserAnnotations && scene.userAnnotations && scene.userAnnotations[ni.id]) {
+        const noteData = scene.userAnnotations[ni.id];
+        const note = noteData.text || noteData; // back-compat if string
+        const nc = NOTE_COLORS[noteData.colorIdx || 0] || NOTE_COLORS[0];
+        ctx.save();
+        const noteFont = "bold " + Math.max(10, scene.fontSize - 1) + "px system-ui, sans-serif";
+        ctx.font = noteFont;
+        const pad = 7, lineH = scene.fontSize + 2, maxTxtW = 130;
+        // word-wrap
+        const rawLines = note.split("\n");
+        const wrappedLines = [];
+        rawLines.forEach(function(para) {
+          if (!para.trim()) { wrappedLines.push(""); return; }
+          const words = para.split(" ");
+          let cur = "";
+          words.forEach(function(w) {
+            const test = cur ? cur + " " + w : w;
+            if (ctx.measureText(test).width > maxTxtW) { if (cur) wrappedLines.push(cur); cur = w; }
+            else cur = test;
+          });
+          if (cur) wrappedLines.push(cur);
+        });
+        const textW = Math.min(maxTxtW, Math.max.apply(null, wrappedLines.map(function(l) { return ctx.measureText(l || " ").width; })));
+        const boxW = textW + pad * 2;
+        const boxH = wrappedLines.length * lineH + pad * 2;
+        const bx = screenX + circleR + 12;
+        const by = Math.max(4, screenY - boxH - circleR - 6);
+        // Connector line
+        ctx.beginPath();
+        ctx.moveTo(screenX, screenY - circleR);
+        ctx.lineTo(bx, by + boxH);
+        ctx.strokeStyle = nc.border;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Box shadow (soft)
+        ctx.shadowColor = "rgba(0,0,0,0.12)";
+        ctx.shadowBlur = 6;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+        // Rounded rect
+        const r = 5;
+        ctx.beginPath();
+        ctx.moveTo(bx + r, by);
+        ctx.lineTo(bx + boxW - r, by);
+        ctx.arcTo(bx + boxW, by, bx + boxW, by + r, r);
+        ctx.lineTo(bx + boxW, by + boxH - r);
+        ctx.arcTo(bx + boxW, by + boxH, bx + boxW - r, by + boxH, r);
+        ctx.lineTo(bx + r, by + boxH);
+        ctx.arcTo(bx, by + boxH, bx, by + boxH - r, r);
+        ctx.lineTo(bx, by + r);
+        ctx.arcTo(bx, by, bx + r, by, r);
+        ctx.closePath();
+        ctx.fillStyle = nc.fill;
+        ctx.fill();
+        ctx.shadowColor = "transparent";
+        ctx.strokeStyle = nc.border;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Text
+        ctx.fillStyle = nc.text;
+        ctx.textBaseline = "top";
+        ctx.textAlign = "left";
+        wrappedLines.forEach(function(line, li) {
+          ctx.fillText(line, bx + pad, by + pad + li * lineH);
+        });
+        ctx.restore();
       }
     });
 
@@ -822,6 +1044,7 @@ export default function App() {
     })() : new Set();
 
     const connectingBranches = computeConnectingBranches(treeData, multiSelected);
+    const hasBL = hasBranchLengths(treeData);
 
     let root, originX, originY, maxDepth = 0;
     let links = [], nodes = [];
@@ -846,12 +1069,19 @@ export default function App() {
         return { sx: d.source.y, sy: d.source.x, tx: d.target.y, ty: d.target.x, srcId: d.source.data._id, tgtId: d.target.data._id };
       });
       nodes = root.descendants().map(function(d) {
-        return { id: d.data._id, localX: d.y, localY: d.x, isLeaf: !d.children, name: d.data.name, angle: null, collapsed: d.data._collapsed, inClade: selDescIds.has(d.data._id), selected: d.data._id === selectedId };
+        return { id: d.data._id, localX: d.y, localY: d.x, isLeaf: !d.children, name: d.data.name, angle: null, collapsed: d.data._collapsed, inClade: selDescIds.has(d.data._id), selected: d.data._id === selectedId, annotations: d.data.annotations || null, depthFromRoot: d._cd !== undefined ? d._cd : 0 };
       });
     } else {
       const r = Math.min(W, H) / 2 - 80;
       originX = W / 2; originY = H / 2;
       root = d3.cluster().size([2 * Math.PI, r])(hier);
+      // Build depth map for radial (needed for node height display)
+      const depthMap = {};
+      (function buildDM(d, acc) {
+        const dep = acc + (d.data.length || 0);
+        depthMap[d.data._id] = dep;
+        if (d.children) d.children.forEach(function(c) { buildDM(c, dep); });
+      })(root, 0);
       links = root.links().map(function(d) {
         const sp = d3.pointRadial(d.source.x, d.source.y);
         const tp = d3.pointRadial(d.target.x, d.target.y);
@@ -859,11 +1089,11 @@ export default function App() {
       });
       nodes = root.descendants().map(function(d) {
         const p = d3.pointRadial(d.x, d.y);
-        return { id: d.data._id, localX: p[0], localY: p[1], isLeaf: !d.children, name: d.data.name, angle: d.x, collapsed: d.data._collapsed, inClade: selDescIds.has(d.data._id), selected: d.data._id === selectedId };
+        return { id: d.data._id, localX: p[0], localY: p[1], isLeaf: !d.children, name: d.data.name, angle: d.x, collapsed: d.data._collapsed, inClade: selDescIds.has(d.data._id), selected: d.data._id === selectedId, annotations: d.data.annotations || null, depthFromRoot: depthMap[d.data._id] || 0 };
       });
     }
 
-    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, lineSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches, traitData, traitMeta, activeTraits };
+    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, hasBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, lineSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches, traitData, traitMeta, activeTraits, showNodeHeights, nodeHeightMode, showNodeLabels, activeNodeAnnotations, nodeLabelFontSize, userAnnotations, showUserAnnotations };
     nodesRef.current = nodes;
     nodes.forEach(function(n) { nodePositionMapRef.current[n.id] = { localX: n.localX, localY: n.localY }; });
 
@@ -976,6 +1206,8 @@ export default function App() {
     });
 
     const handleKey = function(e) {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.code === "Space" && treeData) {
         e.preventDefault();
         zoomTransformRef.current = d3.zoomIdentity;
@@ -1029,6 +1261,31 @@ export default function App() {
     }
   }, [lineSize]);
 
+  useEffect(function() {
+    if (sceneRef.current) {
+      sceneRef.current.showNodeHeights = showNodeHeights;
+      sceneRef.current.nodeHeightMode = nodeHeightMode;
+      sceneRef.current.showNodeLabels = showNodeLabels;
+      sceneRef.current.activeNodeAnnotations = activeNodeAnnotations;
+      sceneRef.current.nodeLabelFontSize = nodeLabelFontSize;
+      scheduleRender(zoomTransformRef.current);
+    }
+  }, [showNodeHeights, nodeHeightMode, showNodeLabels, activeNodeAnnotations, nodeLabelFontSize]);
+
+  useEffect(function() {
+    const existing = selectedId != null ? userAnnotations[selectedId] : null;
+    setNoteInput(existing ? existing.text : "");
+    setNoteColorIdx(existing ? (existing.colorIdx || 0) : 0);
+  }, [selectedId]);
+
+  useEffect(function() {
+    if (sceneRef.current) {
+      sceneRef.current.userAnnotations = userAnnotations;
+      sceneRef.current.showUserAnnotations = showUserAnnotations;
+      scheduleRender(zoomTransformRef.current);
+    }
+  }, [userAnnotations, showUserAnnotations]);
+
   const selectedNode = selectedId != null && treeData ? findNode(treeData, selectedId) : null;
   const multiNodes = treeData ? Array.from(multiSelected).map(function(id) { return findNode(treeData, id); }).filter(Boolean) : [];
 
@@ -1037,7 +1294,7 @@ export default function App() {
 
       <div style={{ padding: "10px 16px", borderBottom: "1px solid #e5e7eb", background: "#fff", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <img src="/phylo-scope/favicon.svg" alt="" style={{ width: 22, height: 22, flexShrink: 0 }} />
-        <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", marginRight: 4 }}>phyloScope <span style={{ fontWeight: 400, color: "#9ca3af" }}>v0.2</span></span>
+        <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", marginRight: 4 }}>phyloScope <span style={{ fontWeight: 400, color: "#9ca3af" }}>v0.3</span></span>
         <label style={btn("secondary")}>
           Upload .nwk / .nex / .tre
           <input type="file" accept=".nwk,.txt,.tree,.tre,.nex,.nexus,.nxs" onChange={handleFile} style={{ display: "none" }} />
@@ -1196,6 +1453,118 @@ export default function App() {
                       Click a node or branch to select.<br />
                       <span style={{ color: "#93c5fd" }}>⇧ click</span> two nodes to select their clade.<br />
                       <span style={{ color: "#c4b5fd" }}>⌘/Ctrl+click</span> to build a paraphyletic group.
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ padding: 14, borderBottom: "1px solid #f3f4f6" }}>
+                  <div style={sectionLabel}>Node Labels</div>
+                  {(function() {
+                    const anyAvailable = (hasBranchLengths(treeData)) || treeHasInternalLabels || treeAnnotationKeys.length > 0;
+                    if (!anyAvailable) return (
+                      <div style={{ fontSize: 12, color: "#9ca3af" }}>No node labels available for this tree.</div>
+                    );
+                    const anyActive = showNodeHeights || showNodeLabels || activeNodeAnnotations.length > 0;
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {hasBranchLengths(treeData) && (
+                          <div>
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", color: "#374151" }}>
+                              <input type="checkbox" checked={showNodeHeights} onChange={function(e) { setShowNodeHeights(e.target.checked); }} />
+                              Node heights
+                            </label>
+                            {showNodeHeights && (
+                              <div style={{ marginLeft: 20, marginTop: 4, display: "flex", gap: 12 }}>
+                                <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, cursor: "pointer", color: "#6b7280" }}>
+                                  <input type="radio" name="nodeHeightMode" value="from_root" checked={nodeHeightMode === "from_root"} onChange={function() { setNodeHeightMode("from_root"); }} />
+                                  From root
+                                </label>
+                                <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, cursor: "pointer", color: "#6b7280" }}>
+                                  <input type="radio" name="nodeHeightMode" value="before_present" checked={nodeHeightMode === "before_present"} onChange={function() { setNodeHeightMode("before_present"); }} />
+                                  Before present
+                                </label>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {treeHasInternalLabels && (
+                          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", color: "#374151" }}>
+                            <input type="checkbox" checked={showNodeLabels} onChange={function(e) { setShowNodeLabels(e.target.checked); }} />
+                            Support values
+                          </label>
+                        )}
+                        {treeAnnotationKeys.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3 }}>Annotations</div>
+                            {treeAnnotationKeys.map(function(key) {
+                              const isActive = activeNodeAnnotations.includes(key);
+                              return (
+                                <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", color: "#374151", marginBottom: 3 }}>
+                                  <input type="checkbox" checked={isActive} onChange={function() {
+                                    setActiveNodeAnnotations(function(prev) {
+                                      return prev.includes(key) ? prev.filter(function(k) { return k !== key; }) : prev.concat([key]);
+                                    });
+                                  }} />
+                                  {key}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {Object.keys(userAnnotations).length > 0 && (
+                          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", color: "#374151" }}>
+                            <input type="checkbox" checked={showUserAnnotations} onChange={function(e) { setShowUserAnnotations(e.target.checked); }} />
+                            <span>Show notes <span style={{ fontSize: 10, background: "#fef9c3", border: "1px solid #d97706", color: "#92400e", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>{Object.keys(userAnnotations).length}</span></span>
+                          </label>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ padding: "0 14px", borderBottom: "1px solid #f3f4f6" }}>
+                  <button
+                    onClick={function() { setNoteExpanded(function(x) { return !x; }); }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", background: "none", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    <span>
+                      Node Note
+                      {selectedId != null && userAnnotations[selectedId] && (
+                        <span style={{ marginLeft: 6, display: "inline-block", width: 8, height: 8, borderRadius: 2, background: NOTE_COLORS[userAnnotations[selectedId].colorIdx || 0].border, verticalAlign: "middle" }} />
+                      )}
+                    </span>
+                    <span style={{ fontSize: 9, color: "#9ca3af" }}>{noteExpanded ? "▼" : "▶"}</span>
+                  </button>
+                  {noteExpanded && (
+                    <div style={{ paddingBottom: 10 }}>
+                      {selectedId == null ? (
+                        <div style={{ fontSize: 12, color: "#9ca3af", paddingBottom: 4 }}>Select a node to add a note.</div>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", gap: 5, marginBottom: 6 }}>
+                            {NOTE_COLORS.map(function(c, i) {
+                              return (
+                                <button key={i} onClick={function() { setNoteColorIdx(i); }}
+                                  title={["Amber","Green","Blue","Pink","Purple"][i]}
+                                  style={{ width: 22, height: 22, borderRadius: 5, background: c.fill, border: "2px solid " + (noteColorIdx === i ? c.border : "#d1d5db"), cursor: "pointer", padding: 0, flexShrink: 0 }} />
+                              );
+                            })}
+                          </div>
+                          <textarea
+                            value={noteInput}
+                            onChange={function(e) { setNoteInput(e.target.value); }}
+                            onKeyDown={function(e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveNote(); } }}
+                            placeholder="Add a note for this node…"
+                            rows={2}
+                            style={{ width: "100%", fontSize: 12, padding: "5px 8px", border: "1px solid " + NOTE_COLORS[noteColorIdx].border, borderRadius: 6, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box", outline: "none", lineHeight: 1.5, background: NOTE_COLORS[noteColorIdx].fill }}
+                          />
+                          <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                            <button style={Object.assign({}, btn("secondary"), { flex: 1 })} onClick={saveNote}>Save note</button>
+                            {userAnnotations[selectedId] && (
+                              <button style={Object.assign({}, btn("ghost"), { color: "#dc2626" })} onClick={deleteNote}>Remove</button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1619,26 +1988,23 @@ export default function App() {
 
       {whatsNewOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}
-          onClick={function(e) { if (e.target === e.currentTarget) { localStorage.setItem("phylo_seen_whats_new", "v0.2"); setWhatsNewOpen(false); } }}>
+          onClick={function(e) { if (e.target === e.currentTarget) { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); } }}>
           <div style={{ background: "#fff", borderRadius: 10, padding: 28, maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
                 {"What's new in "}
-                <span style={{ color: "#1a5c35" }}>v0.2</span>
+                <span style={{ color: "#1a5c35" }}>v0.3</span>
               </div>
-              <button onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.2"); setWhatsNewOpen(false); }}
+              <button onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); }}
                 style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
             </div>
             <ul style={{ margin: 0, padding: "0 0 0 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               {[
-                { bold: "Trait visualisation", text: " — upload a CSV to paint continuous or discrete trait data alongside tip labels as colour-coded squares" },
-                { bold: "Lineages Through Time plot", text: " — open an LTT plot for any time-scaled tree from the header toolbar" },
-                { bold: "Tip renaming", text: " — select a tip in the Clade tab to rename it inline" },
-                { bold: "Arrow key panning", text: " — use ↑ ↓ ← → to pan the canvas in addition to drag" },
-                { bold: "Line weight slider", text: " — scale branch widths and node dot sizes together with a single slider" },
-                { bold: "Colour-coded branch info", text: " — branch length shown in orange, clade statistics in blue, matching the tree highlight colours" },
-                { bold: "MRCA height for paraphyletic groups", text: " — the height of the most recent common ancestor is now shown alongside Phylogenetic Diversity" },
-                { bold: "Extract selected tips", text: " — a new button in the paraphyletic group panel keeps only the selected tips and prunes everything else" },
+                { bold: "Node labels", text: " — display node heights (from root or time-before-present), support values, and BEAST-style annotations directly on the tree via the Clade tab" },
+                { bold: "BEAST annotation support", text: " — trees with [&key=value] annotations are now parsed correctly; annotation keys appear as toggleable display options" },
+                { bold: "NEXUS annotation support", text: " — [&…] annotations in NEXUS files are preserved and displayed alongside translate-table trees" },
+                { bold: "Node notes", text: " — add free-text sticky notes to any node, choosing from five colours; notes are shown as labelled boxes on the canvas" },
+                { bold: "Export with notes", text: " — when exporting Newick, choose whether to embed node notes as [&note=…] annotations in the file" },
               ].map(function(item, i) {
                 return (
                   <li key={i} style={{ fontSize: 13, color: "#374151", lineHeight: 1.55 }}>
@@ -1648,9 +2014,26 @@ export default function App() {
               })}
             </ul>
             <button style={Object.assign({}, btn("primary"), { alignSelf: "flex-end" })}
-              onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.2"); setWhatsNewOpen(false); }}>
+              onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); }}>
               Got it
             </button>
+          </div>
+        </div>
+      )}
+
+      {exportDialogOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}
+          onClick={function(e) { if (e.target === e.currentTarget) setExportDialogOpen(false); }}>
+          <div style={{ background: "#fff", borderRadius: 10, padding: 28, maxWidth: 360, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8, color: "#111827" }}>Export Newick</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 22, lineHeight: 1.6 }}>
+              Include node notes as <span style={{ fontFamily: "monospace", background: "#f3f4f6", padding: "1px 4px", borderRadius: 3 }}>[&amp;note=…]</span> annotations in the exported file?
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button style={btn("secondary")} onClick={function() { setExportDialogOpen(false); }}>Cancel</button>
+              <button style={btn("secondary")} onClick={function() { doExport(false); }}>Skip notes</button>
+              <button style={btn("primary")} onClick={function() { doExport(true); }}>Include notes</button>
+            </div>
           </div>
         </div>
       )}

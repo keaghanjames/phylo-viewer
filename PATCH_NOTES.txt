@@ -1,6 +1,23 @@
 PHYLOSCOPE — PATCH NOTES
 ========================
 
+[v0.3] — 2026-04-26
+--------------------
+- Node Labels section in Clade tab (always visible, no selection required)
+  - Toggle node heights at internal nodes (from root or time-before-present via radio button)
+  - Toggle support values (plain internal node labels, e.g. bootstrap scores)
+  - Toggle individual BEAST-style annotation keys (e.g. posterior, height_95%_HPD)
+- BEAST [&key=value] annotations now parsed from Newick and NEXUS files
+  - Preserved through NEXUS TRANSLATE round-trip; serialised back on export
+- Node notes: add free-text sticky notes to any node via the collapsible "Node Note" section
+  - Five colour themes (amber, green, blue, pink, purple)
+  - Notes displayed as styled boxes on the canvas with a dashed connector line
+  - "Show notes" toggle (with count badge) in the Node Labels section
+- Export .nwk now prompts to include node notes as [&note="…"] annotations
+- Fixed: internal node names (support values) were displayed without the toggle being enabled
+- Fixed: Space / arrow keys now work correctly when typing in text fields
+
+
 [v0.2] — 2026-04-23
 --------------------
 - Added "What's new in v0.2" welcome modal (shown once per version, localStorage-gated)

@@ -265,11 +265,13 @@ function parseNexusToNewick(text) {
   }
 
   // Find first TREE statement: TREE [*] name = [comment] newick;
-  const treeMatch = treesBlock.match(/TREE\s+(?:\*\s*)?\S+\s*=\s*([\s\S]+?)\s*;/i);
+  // Use [^\s=]+ for the tree name to avoid greedy \S+ consuming content when taxon names have no spaces
+  const treeMatch = treesBlock.match(/TREE\s+(?:\*\s*)?[^\s=]+\s*=\s*([\s\S]+?)\s*;/i);
   if (!treeMatch) return null;
 
   // Strip plain [comments] but preserve BEAST [&annotations]
-  let newick = treeMatch[1].replace(/\[(?!&)[^\]]*\]/g, '').trim();
+  // Handle both [comment] and [\[&...\]] (escaped-bracket BEAST annotations wrapped in NEXUS comments)
+  let newick = treeMatch[1].replace(/\[(?!&)((?:[^\]\\]|\\[\s\S])*)\]/g, '').trim();
 
   // Apply translate by walking the parsed tree and substituting node names
   if (Object.keys(translateMap).length > 0) {
@@ -336,6 +338,19 @@ const NOTE_COLORS = [
   { fill: "#ede9fe", border: "#7c3aed", text: "#3b0764" }, // purple
 ];
 
+const CONTINUOUS_PALETTES = [
+  { key: "viridis",  label: "Viridis",  fn: function(t) { return d3.interpolateViridis(t); } },
+  { key: "magma",    label: "Magma",    fn: function(t) { return d3.interpolateMagma(t); } },
+  { key: "inferno",  label: "Inferno",  fn: function(t) { return d3.interpolateInferno(t); } },
+  { key: "plasma",   label: "Plasma",   fn: function(t) { return d3.interpolatePlasma(t); } },
+  { key: "cividis",  label: "Cividis",  fn: function(t) { return d3.interpolateCividis(t); } },
+  { key: "turbo",    label: "Turbo",    fn: function(t) { return d3.interpolateTurbo(t); } },
+];
+
+function paletteCSSGradient(fn) {
+  return "linear-gradient(to right," + [0, 0.25, 0.5, 0.75, 1].map(fn).join(",") + ")";
+}
+
 // ── Trait data utilities ──────────────────────────────────────────────────────
 
 function parseCSVRow(line) {
@@ -379,8 +394,9 @@ function computeTraitMeta(traitCols, rows) {
     const isContinuous = values.length > 0 && nums.every(function(n) { return !isNaN(n); });
     if (isContinuous) {
       const min = Math.min.apply(null, nums), max = Math.max.apply(null, nums);
-      meta[col] = { type: "continuous", min, max,
-        colorFn: function(v) { if (v === null) return null; const t = max === min ? 0.5 : (Number(v) - min) / (max - min); return d3.interpolateViridis(t); }
+      const palFn = CONTINUOUS_PALETTES[0].fn;
+      meta[col] = { type: "continuous", min, max, palette: "viridis",
+        colorFn: function(v) { if (v === null) return null; const t = max === min ? 0.5 : (Number(v) - min) / (max - min); return palFn(t); }
       };
     } else {
       const categories = []; values.forEach(function(v) { if (!categories.includes(v)) categories.push(v); }); categories.sort();
@@ -430,9 +446,10 @@ export default function App() {
   const [renameValue, setRenameValue] = useState("");
   const [lttOpen, setLttOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(function() {
-    return localStorage.getItem("phylo_seen_whats_new") !== "v0.3";
+    return localStorage.getItem("phylo_seen_whats_new") !== "v0.4";
   });
   const [citeOpen, setCiteOpen] = useState(false);
+  const [focusCladeId, setFocusCladeId] = useState(null);
   const [showNodeHeights, setShowNodeHeights] = useState(false);
   const [nodeHeightMode, setNodeHeightMode] = useState("from_root");
   const [showNodeLabels, setShowNodeLabels] = useState(false);
@@ -446,6 +463,11 @@ export default function App() {
   const [noteColorIdx, setNoteColorIdx] = useState(0);
   const [noteExpanded, setNoteExpanded] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [dataTableOpen, setDataTableOpen] = useState(false);
+  const [newColName, setNewColName] = useState("");
+  const [traitVersion, setTraitVersion] = useState(0);
+  const [hiddenTraitCols, setHiddenTraitCols] = useState(new Set());
+  const [traitRowSort, setTraitRowSort] = useState("tree");
 
   const openSource = function() { setSourceText(treeData ? toNewick(treeData) + ";" : ""); setSourceOpen(true); };
   const closeSource = function() { setSourceOpen(false); };
@@ -461,6 +483,8 @@ export default function App() {
       const meta = computeTraitMeta(traitCols, rows);
       setTraitData(rows); setTraitMeta(meta); setTraitNames(traitCols);
       setActiveTraits(traitCols.slice(0, 5));
+      setTraitVersion(function(v) { return v + 1; });
+      setHiddenTraitCols(new Set());
       if (treeData) {
         const leafNames = getLeafNames(treeData);
         setTraitMatchCount({ matched: leafNames.filter(function(n) { return rows[n] !== undefined; }).length, total: leafNames.length });
@@ -470,7 +494,72 @@ export default function App() {
     e.target.value = "";
   };
 
-  const clearTraits = function() { setTraitData(null); setTraitMeta({}); setTraitNames([]); setActiveTraits([]); setTraitMatchCount({ matched: 0, total: 0 }); };
+  const clearTraits = function() { setTraitData(null); setTraitMeta({}); setTraitNames([]); setActiveTraits([]); setTraitMatchCount({ matched: 0, total: 0 }); setDataTableOpen(false); setHiddenTraitCols(new Set()); };
+
+  const createTraitData = function() {
+    if (!treeData) return;
+    const leafNames = getLeafNames(treeData);
+    if (!leafNames.length) return;
+    const rows = {};
+    leafNames.forEach(function(n) { rows[n] = {}; });
+    setTraitData(rows);
+    setTraitMeta({});
+    setTraitNames([]);
+    setActiveTraits([]);
+    setTraitMatchCount({ matched: leafNames.length, total: leafNames.length });
+    setTraitVersion(function(v) { return v + 1; });
+    setHiddenTraitCols(new Set());
+    setDataTableOpen(true);
+  };
+
+  const updateTraitPalette = function(traitName, paletteKey) {
+    const pal = CONTINUOUS_PALETTES.find(function(p) { return p.key === paletteKey; }) || CONTINUOUS_PALETTES[0];
+    setTraitMeta(function(prev) {
+      const m = prev[traitName];
+      if (!m || m.type !== "continuous") return prev;
+      const min = m.min, max = m.max;
+      return Object.assign({}, prev, {
+        [traitName]: Object.assign({}, m, {
+          palette: paletteKey,
+          colorFn: function(v) { if (v === null) return null; const t = max === min ? 0.5 : (Number(v) - min) / (max - min); return pal.fn(t); }
+        })
+      });
+    });
+  };
+
+  const handleCellEdit = function(tipName, colName, rawValue) {
+    const trimmed = rawValue.trim();
+    const value = trimmed === "" || /^(NA|na|N\/A|n\/a|null|NULL|-)$/.test(trimmed) ? null : trimmed;
+    setTraitData(function(prev) {
+      if (!prev || !prev[tipName]) return prev;
+      return Object.assign({}, prev, { [tipName]: Object.assign({}, prev[tipName], { [colName]: value }) });
+    });
+  };
+
+  const addTraitColumn = function() {
+    const col = newColName.trim();
+    if (!col || !traitData || traitNames.includes(col)) return;
+    const newNames = traitNames.concat([col]);
+    const newData = {};
+    Object.keys(traitData).forEach(function(tip) { newData[tip] = Object.assign({}, traitData[tip], { [col]: null }); });
+    setTraitNames(newNames);
+    setTraitData(newData);
+    setActiveTraits(function(prev) { return prev.concat([col]); });
+    setNewColName("");
+  };
+
+  const exportTraitCSV = function() {
+    if (!traitData || !traitNames.length) return;
+    const esc = function(v) { const s = (v === null || v === undefined) ? "" : String(v); return /[,"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const treeLeaves = treeData ? getLeafNames(treeData) : [];
+    const treeLeafSet = new Set(treeLeaves);
+    const ordered = treeLeaves.filter(function(n) { return traitData[n]; }).concat(Object.keys(traitData).filter(function(n) { return !treeLeafSet.has(n); }));
+    const csv = [["tip_labels"].concat(traitNames).map(esc).join(",")]
+      .concat(ordered.map(function(tip) { return [tip].concat(traitNames.map(function(col) { return traitData[tip] ? traitData[tip][col] : null; })).map(esc).join(","); }))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "traits.csv"; a.click();
+  };
 
   // Paste your Formspree endpoint here after creating a form at formspree.io
   const FORMSPREE_ENDPOINT = "https://formspree.io/f/xgorpzja";
@@ -505,6 +594,9 @@ export default function App() {
   const treeDataRef = useRef(null);
   const selectedIdRef = useRef(null);
   const multiSelectedRef = useRef(new Set());
+  const focusCladeIdRef = useRef(null);
+  const tableContainerRef = useRef(null);
+  const rowRefsMap = useRef({});
 
   const sampleNewick = "((((Homo_sapiens:0.007,Pan_troglodytes:0.007)100:0.003,Gorilla_gorilla:0.01)98:0.008,Pongo_pygmaeus:0.018)95:0.012,Macaca_mulatta:0.03)100;";
 
@@ -541,6 +633,7 @@ export default function App() {
     setCladeFocusId(null);
     setSearchQuery("");
     zoomTransformRef.current = d3.zoomIdentity;
+    setFocusCladeId(null);
   };
 
   const handleFile = function(e) {
@@ -558,6 +651,7 @@ export default function App() {
   };
 
   const applyEdit = function(newTree) {
+    setFocusCladeId(null);
     pushHistory(treeData);
     assignIds(newTree);
     setLeafCount(countLeaves(newTree));
@@ -579,7 +673,9 @@ export default function App() {
   const extractClade = function() {
     if (selectedId == null || !treeData) return;
     const n = findNode(treeData, selectedId); if (!n) return;
-    const t = cloneTree(n); t.length = null; applyEdit(t);
+    const t = cloneTree(n); t.length = null;
+    zoomTransformRef.current = d3.zoomIdentity;
+    applyEdit(t);
   };
 
   const deleteClade = function() {
@@ -599,6 +695,11 @@ export default function App() {
     const n = findNode(t, selectedId);
     if (n) n._collapsed = !n._collapsed;
     pushHistory(treeData); setTreeData(t);
+  };
+
+  const collapseOthers = function() {
+    if (selectedId == null || !treeData) return;
+    setFocusCladeId(selectedId);
   };
 
   const doRename = function(newName) {
@@ -777,6 +878,7 @@ export default function App() {
     const scLayout = scene.layout, selDescIds = scene.selDescIds, sid = scene.selectedId;
     const fa = scene.flipAxis, sfid = scene.searchFocusId, cfid = scene.cladeFocusId;
     const connectingBranches = scene.connectingBranches;
+    const focusDescIds = scene.focusDescIds;
     const k = transform.k, x = transform.x, y = transform.y;
     const mIds = matchIds || new Set();
     const ms = multiSel || new Set();
@@ -788,6 +890,7 @@ export default function App() {
 
     const ls = scene.lineSize || 1;
     links.forEach(function(lk) {
+      if (focusDescIds && !(focusDescIds.has(lk.srcId) && focusDescIds.has(lk.tgtId))) return;
       const isSel = lk.tgtId === sid;
       const inClade = selDescIds.has(lk.srcId) && selDescIds.has(lk.tgtId);
       const isMultiNode = ms.has(lk.tgtId);
@@ -808,7 +911,35 @@ export default function App() {
     const autoShow = k > (scene.leafCount > 500 ? 500 / scene.leafCount : 0.3);
     const showLbls = scene.showLabels && autoShow;
 
+    // Pre-compute visible min/max for continuous traits based on currently visible leaf tips
+    const visibleTraitRanges = {};
+    if (scene.traitData && scene.activeTraits && scene.activeTraits.length > 0) {
+      scene.activeTraits.forEach(function(traitName) {
+        const tm = scene.traitMeta[traitName];
+        if (!tm || tm.type !== "continuous") return;
+        const vals = [];
+        nodes.forEach(function(ni) {
+          if (focusDescIds && !focusDescIds.has(ni.id)) return;
+          if (!ni.isLeaf || ni.collapsed) return;
+          const tv = scene.traitData[ni.name] ? scene.traitData[ni.name][traitName] : null;
+          if (tv !== null && tv !== undefined) vals.push(Number(tv));
+        });
+        if (vals.length > 0) visibleTraitRanges[traitName] = { min: Math.min.apply(null, vals), max: Math.max.apply(null, vals) };
+      });
+    }
+    function traitColor(traitName, tv) {
+      const tm = scene.traitMeta[traitName];
+      if (!tm || tv === null || tv === undefined) return null;
+      if (tm.type === "discrete") return tm.colorFn(tv);
+      const range = visibleTraitRanges[traitName];
+      const vmin = range ? range.min : tm.min;
+      const vmax = range ? range.max : tm.max;
+      const t = vmax === vmin ? 0.5 : (Number(tv) - vmin) / (vmax - vmin);
+      return (CONTINUOUS_PALETTES.find(function(p) { return p.key === (tm.palette || "viridis"); }) || CONTINUOUS_PALETTES[0]).fn(t);
+    }
+
     nodes.forEach(function(ni) {
+      if (focusDescIds && !focusDescIds.has(ni.id)) return;
       const screenX = sx(ni.localX), screenY = sy(ni.localY);
       if (screenX < -20 || screenX > W + 20 || screenY < -20 || screenY > H + 20) return;
       const isMatch = mIds.has(ni.id);
@@ -822,7 +953,7 @@ export default function App() {
       if (ni.isLeaf && scLayout === "radial" && scene.activeTraits && scene.activeTraits.length > 0) {
         const tm = scene.traitMeta[scene.activeTraits[0]];
         const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][scene.activeTraits[0]] : null;
-        if (tm && tv !== null) traitNodeColor = tm.colorFn(tv);
+        if (tm && tv !== null) traitNodeColor = traitColor(scene.activeTraits[0], tv);
       }
 
       ctx.beginPath();
@@ -847,7 +978,7 @@ export default function App() {
         scene.activeTraits.forEach(function(traitName, ti) {
           const tm = scene.traitMeta[traitName]; if (!tm) return;
           const tv = scene.traitData && ni.name && scene.traitData[ni.name] ? scene.traitData[ni.name][traitName] : null;
-          const color = tv !== null ? tm.colorFn(tv) : null;
+          const color = traitColor(traitName, tv);
           const x = sqStart + ti * (sqSz + sqPad);
           ctx.fillStyle = color || "#e5e7eb";
           ctx.fillRect(x, screenY - sqSz / 2, sqSz, sqSz);
@@ -1093,14 +1224,18 @@ export default function App() {
       });
     }
 
-    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, hasBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, lineSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches, traitData, traitMeta, activeTraits, showNodeHeights, nodeHeightMode, showNodeLabels, activeNodeAnnotations, nodeLabelFontSize, userAnnotations, showUserAnnotations };
+    sceneRef.current = { W, H, links, nodes, originX, originY, useBL, hasBL, maxDepth, tw, margin, layout, selDescIds, selectedId, fontSize, lineSize, flipAxis, showLabels, leafCount: nLeaves, searchFocusId, cladeFocusId, connectingBranches, traitData, traitMeta, activeTraits, showNodeHeights, nodeHeightMode, showNodeLabels, activeNodeAnnotations, nodeLabelFontSize, userAnnotations, showUserAnnotations, focusCladeId: null, focusDescIds: null };
+    const fci = focusCladeIdRef.current;
+    if (fci != null) { const fn = findNode(treeData, fci); sceneRef.current.focusCladeId = fci; sceneRef.current.focusDescIds = fn ? getDescendantIds(fn) : null; }
     nodesRef.current = nodes;
     nodes.forEach(function(n) { nodePositionMapRef.current[n.id] = { localX: n.localX, localY: n.localY }; });
 
     function hitTest(ex, ey, transform) {
       const k = transform.k, x = transform.x, y = transform.y;
+      const fds = sceneRef.current ? sceneRef.current.focusDescIds : null;
       for (let i = 0; i < nodes.length; i++) {
         const ni = nodes[i];
+        if (fds && !fds.has(ni.id)) continue;
         const sx = ni.localX * k + originX + x, sy = ni.localY * k + originY + y;
         if ((ex - sx) * (ex - sx) + (ey - sy) * (ey - sy) < 100) return ni.id;
       }
@@ -1145,8 +1280,10 @@ export default function App() {
         const fs = sceneRef.current ? sceneRef.current.fontSize : 12;
         const ls = sceneRef.current ? (sceneRef.current.lineSize || 1) : 1;
         const circleR = 3 * ls, gap = circleR + 3;
+        const fds2 = sceneRef.current ? sceneRef.current.focusDescIds : null;
         for (let i = 0; i < nodesRef.current.length; i++) {
           const ni = nodesRef.current[i];
+          if (fds2 && !fds2.has(ni.id)) continue;
           if (!ni.name) continue;
           const screenX = ni.localX * k + originX + x;
           const screenY = ni.localY * k + originY + y;
@@ -1262,6 +1399,17 @@ export default function App() {
   }, [lineSize]);
 
   useEffect(function() {
+    focusCladeIdRef.current = focusCladeId;
+    if (sceneRef.current) {
+      const fn = focusCladeId != null && treeData ? findNode(treeData, focusCladeId) : null;
+      const descIds = fn ? getDescendantIds(fn) : null;
+      sceneRef.current.focusCladeId = focusCladeId;
+      sceneRef.current.focusDescIds = descIds;
+      scheduleRender(zoomTransformRef.current);
+    }
+  }, [focusCladeId]);
+
+  useEffect(function() {
     if (sceneRef.current) {
       sceneRef.current.showNodeHeights = showNodeHeights;
       sceneRef.current.nodeHeightMode = nodeHeightMode;
@@ -1286,6 +1434,36 @@ export default function App() {
     }
   }, [userAnnotations, showUserAnnotations]);
 
+  useEffect(function() {
+    if (!dataTableOpen || selectedId == null) return;
+    const td = treeDataRef.current;
+    if (!td) return;
+    const node = findNode(td, selectedId);
+    if (!node || (node.children && node.children.length > 0)) return;
+    const tipName = node.name;
+    if (!tipName) return;
+    const rowEl = rowRefsMap.current[tipName];
+    if (rowEl) rowEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedId, dataTableOpen]);
+
+  useEffect(function() {
+    if (!traitData || !traitNames.length) return;
+    const newMeta = computeTraitMeta(traitNames, traitData);
+    setTraitMeta(function(prevMeta) {
+      traitNames.forEach(function(col) {
+        if (prevMeta[col] && newMeta[col] && prevMeta[col].type === "continuous" && newMeta[col].type === "continuous" && prevMeta[col].palette) {
+          const pal = CONTINUOUS_PALETTES.find(function(p) { return p.key === prevMeta[col].palette; }) || CONTINUOUS_PALETTES[0];
+          const min = newMeta[col].min, max = newMeta[col].max;
+          newMeta[col] = Object.assign({}, newMeta[col], {
+            palette: prevMeta[col].palette,
+            colorFn: function(v) { if (v === null) return null; const t = max === min ? 0.5 : (Number(v) - min) / (max - min); return pal.fn(t); }
+          });
+        }
+      });
+      return newMeta;
+    });
+  }, [traitData, traitNames]);
+
   const selectedNode = selectedId != null && treeData ? findNode(treeData, selectedId) : null;
   const multiNodes = treeData ? Array.from(multiSelected).map(function(id) { return findNode(treeData, id); }).filter(Boolean) : [];
 
@@ -1294,7 +1472,7 @@ export default function App() {
 
       <div style={{ padding: "10px 16px", borderBottom: "1px solid #e5e7eb", background: "#fff", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <img src="/phylo-scope/favicon.svg" alt="" style={{ width: 22, height: 22, flexShrink: 0 }} />
-        <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", marginRight: 4 }}>phyloScope <span style={{ fontWeight: 400, color: "#9ca3af" }}>v0.3</span></span>
+        <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", marginRight: 4 }}>phyloScope <span style={{ fontWeight: 400, color: "#9ca3af" }}>v0.4</span></span>
         <label style={btn("secondary")}>
           Upload .nwk / .nex / .tre
           <input type="file" accept=".nwk,.txt,.tree,.tre,.nex,.nexus,.nxs" onChange={handleFile} style={{ display: "none" }} />
@@ -1354,6 +1532,18 @@ export default function App() {
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           <div ref={containerRef} style={{ flex: 1, position: "relative", overflow: "hidden" }}>
             <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+            {focusCladeId != null && (
+              <button onClick={function() { setFocusCladeId(null); }} style={{
+                position: "absolute", top: 10, left: 10, zIndex: 10,
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "5px 10px", borderRadius: 6, border: "1px solid #d97706",
+                background: "#fef9c3", color: "#78350f",
+                fontSize: 12, fontWeight: 600, cursor: "pointer",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.15)"
+              }}>
+                ↩ Full tree
+              </button>
+            )}
           </div>
 
           <div style={{ width: 240, borderLeft: "1px solid #e5e7eb", background: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
@@ -1444,6 +1634,9 @@ export default function App() {
                         </div>
                       )}
                       <button style={btn("secondary", true)} onClick={toggleCollapse}>{selectedNode._collapsed ? "Expand clade" : "Collapse clade"}</button>
+                      {(!selectedNode.children || !selectedNode.children.length) ? null : (
+                        <button style={btn("secondary", true)} onClick={collapseOthers}>Collapse others</button>
+                      )}
                       <button style={btn("secondary", true)} onClick={extractClade}>Extract clade</button>
                       <button style={Object.assign({}, btn("secondary", true), { color: "#dc2626", borderColor: "#fca5a5" })} onClick={deleteClade}>Delete clade</button>
                       <button style={btn("ghost", true)} onClick={function() { setSelectedId(null); setRenameValue(""); }}>Deselect</button>
@@ -1703,22 +1896,36 @@ export default function App() {
                     Upload trait CSV
                     <input type="file" accept=".csv,.txt,.tsv" onChange={handleTraitFile} style={{ display: "none" }} />
                   </label>
+                  {treeData && !traitData && (
+                    <button style={Object.assign({}, btn("secondary"), { display: "block", width: "100%", textAlign: "center", marginTop: 6, boxSizing: "border-box" })} onClick={createTraitData}>
+                      Create trait CSV
+                    </button>
+                  )}
                   <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6, lineHeight: 1.5 }}>
                     First column: tip names. Remaining columns: traits. Numeric columns are treated as continuous, text as discrete. Empty cells / NA are shown in grey.
                   </div>
                 </div>
 
-                {traitNames.length === 0 && (
+                {!traitData && (
                   <div style={{ padding: 14, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>
-                    Upload a CSV to visualise trait data alongside the tree.
+                    Upload a CSV or create a blank table to visualise trait data alongside the tree.
                   </div>
                 )}
 
-                {traitNames.length > 0 && (
+                {traitData && (
                   <>
-                    <div style={{ padding: "6px 12px", borderBottom: "1px solid #f3f4f6", fontSize: 11, color: "#6b7280" }}>
-                      {traitMatchCount.matched} / {traitMatchCount.total} tips matched
+                    <div style={{ padding: "5px 12px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontSize: 11, color: "#6b7280" }}>{traitMatchCount.matched} / {traitMatchCount.total} tips matched</span>
+                      <button style={Object.assign({}, btn("secondary"), { fontSize: 11, padding: "3px 9px" })}
+                        onClick={function() { setDataTableOpen(function(x) { return !x; }); }}>
+                        {dataTableOpen ? "Hide data" : "View data"}
+                      </button>
                     </div>
+                    {traitNames.length === 0 && (
+                      <div style={{ padding: 14, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>
+                        {traitMatchCount.total} tips loaded. Use "Add column" in the data editor to create trait columns.
+                      </div>
+                    )}
                     <div style={{ flex: 1, overflowY: "auto" }}>
                       {traitNames.map(function(name) {
                         const meta = traitMeta[name]; if (!meta) return null;
@@ -1739,10 +1946,20 @@ export default function App() {
                             {meta.type === "continuous" && (
                               <div style={{ marginLeft: 22 }}>
                                 <div style={{ height: 7, borderRadius: 3, marginBottom: 2,
-                                  background: "linear-gradient(to right, " + d3.interpolateViridis(0) + ", " + d3.interpolateViridis(0.5) + ", " + d3.interpolateViridis(1) + ")" }} />
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#9ca3af" }}>
+                                  background: paletteCSSGradient((CONTINUOUS_PALETTES.find(function(p) { return p.key === (meta.palette || "viridis"); }) || CONTINUOUS_PALETTES[0]).fn) }} />
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#9ca3af", marginBottom: 5 }}>
                                   <span>{Number(meta.min.toPrecision(4))}</span>
                                   <span>{Number(meta.max.toPrecision(4))}</span>
+                                </div>
+                                <div style={{ display: "flex", gap: 3 }}>
+                                  {CONTINUOUS_PALETTES.map(function(pal) {
+                                    const isSelected = (meta.palette || "viridis") === pal.key;
+                                    return (
+                                      <button key={pal.key} title={pal.label}
+                                        onClick={function() { updateTraitPalette(name, pal.key); }}
+                                        style={{ flex: 1, height: 10, borderRadius: 2, border: "2px solid " + (isSelected ? "#111827" : "transparent"), background: paletteCSSGradient(pal.fn), cursor: "pointer", padding: 0 }} />
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}
@@ -1773,6 +1990,111 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {dataTableOpen && traitData && (
+            <div style={{ width: 420, borderLeft: "1px solid #e5e7eb", background: "#fff", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
+              <div style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 8, background: "#f9fafb", flexShrink: 0 }}>
+                <span style={{ fontWeight: 600, fontSize: 13, flex: 1, color: "#111827" }}>Trait Data</span>
+                <div style={{ display: "flex", gap: 2, background: "#f3f4f6", borderRadius: 5, padding: 2 }}>
+                  <button title="Tree order" onClick={function() { setTraitRowSort("tree"); }}
+                    style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, border: "none", cursor: "pointer", fontWeight: 500, background: traitRowSort === "tree" ? "#fff" : "transparent", color: traitRowSort === "tree" ? "#111827" : "#9ca3af", boxShadow: traitRowSort === "tree" ? "0 1px 2px rgba(0,0,0,0.08)" : "none" }}>
+                    Tree
+                  </button>
+                  <button title="Alphabetical order" onClick={function() { setTraitRowSort("alpha"); }}
+                    style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, border: "none", cursor: "pointer", fontWeight: 500, background: traitRowSort === "alpha" ? "#fff" : "transparent", color: traitRowSort === "alpha" ? "#111827" : "#9ca3af", boxShadow: traitRowSort === "alpha" ? "0 1px 2px rgba(0,0,0,0.08)" : "none" }}>
+                    A→Z
+                  </button>
+                </div>
+                <button style={Object.assign({}, btn("secondary"), { fontSize: 11, padding: "3px 9px" })} onClick={exportTraitCSV}>Export CSV</button>
+                <button onClick={function() { setDataTableOpen(false); }} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
+              </div>
+              <div style={{ padding: "5px 10px", borderBottom: "1px solid #f3f4f6", display: "flex", gap: 6, flexShrink: 0 }}>
+                <input
+                  value={newColName}
+                  onChange={function(e) { setNewColName(e.target.value); }}
+                  onKeyDown={function(e) { if (e.key === "Enter") addTraitColumn(); }}
+                  placeholder="New column name…"
+                  style={{ flex: 1, fontSize: 11, padding: "3px 8px", border: "1px solid #d1d5db", borderRadius: 5, outline: "none", fontFamily: "inherit" }}
+                />
+                <button style={Object.assign({}, btn("secondary"), { fontSize: 11, padding: "3px 9px" })} onClick={addTraitColumn}>Add</button>
+              </div>
+              <div ref={tableContainerRef} style={{ flex: 1, overflow: "auto" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 11, width: "100%", tableLayout: "auto" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ position: "sticky", top: 0, padding: "5px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "2px solid #e5e7eb", background: "#f9fafb", whiteSpace: "nowrap", zIndex: 1 }}>tip_labels</th>
+                      {traitNames.map(function(col) {
+                        const isHidden = hiddenTraitCols.has(col);
+                        if (isHidden) {
+                          return (
+                            <th key={col} style={{ position: "sticky", top: 0, width: 22, minWidth: 22, maxWidth: 22, padding: "0 2px", borderBottom: "2px solid #e5e7eb", background: "#f9fafb", zIndex: 1 }}>
+                              <button title={"Show " + col} onClick={function() { setHiddenTraitCols(function(prev) { const s = new Set(prev); s.delete(col); return s; }); }}
+                                style={{ border: "none", background: "none", cursor: "pointer", color: "#9ca3af", fontSize: 10, padding: 0, lineHeight: 1, width: "100%", textAlign: "center" }}>▸</button>
+                            </th>
+                          );
+                        }
+                        return (
+                          <th key={col} style={{ position: "sticky", top: 0, padding: "5px 6px 5px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "2px solid #e5e7eb", background: "#f9fafb", whiteSpace: "nowrap", zIndex: 1 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <span style={{ flex: 1 }}>{col}</span>
+                              {traitMeta[col] && (
+                                <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 8, background: traitMeta[col].type === "continuous" ? "#dbeafe" : "#f0fdf4", color: traitMeta[col].type === "continuous" ? "#1d4ed8" : "#15803d", flexShrink: 0 }}>
+                                  {traitMeta[col].type === "continuous" ? "C" : "D"}
+                                </span>
+                              )}
+                              <button title={"Hide " + col} onClick={function() { setHiddenTraitCols(function(prev) { const s = new Set(prev); s.add(col); return s; }); }}
+                                style={{ border: "none", background: "none", cursor: "pointer", color: "#d1d5db", fontSize: 11, padding: 0, lineHeight: 1, flexShrink: 0 }}>▾</button>
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody key={traitVersion}>
+                    {(function() {
+                      const treeLeaves = treeData ? getLeafNames(treeData) : [];
+                      const treeLeafSet = new Set(treeLeaves);
+                      const orderedTips = traitRowSort === "alpha"
+                        ? Object.keys(traitData).slice().sort(function(a, b) { return a.localeCompare(b); })
+                        : treeLeaves.filter(function(n) { return traitData[n]; })
+                            .concat(Object.keys(traitData).filter(function(n) { return !treeLeafSet.has(n); }));
+                      const selTipName = selectedNode && (!selectedNode.children || !selectedNode.children.length) ? selectedNode.name : null;
+                      return orderedTips.map(function(tip) {
+                        const isSelected = tip === selTipName;
+                        return (
+                          <tr key={tip}
+                            ref={function(el) { rowRefsMap.current[tip] = el; }}
+                            onFocus={function() {
+                              const ni = nodesRef.current.find(function(n) { return n.isLeaf && n.name === tip; });
+                              if (ni) { setSelectedId(ni.id); setMultiSelected(new Set()); }
+                            }}
+                            style={{ background: isSelected ? "#eff6ff" : "transparent", borderBottom: "1px solid #f3f4f6" }}>
+                            <td style={{ padding: "3px 10px", fontWeight: isSelected ? 700 : 400, color: isSelected ? "#1d4ed8" : "#374151", whiteSpace: "nowrap", fontFamily: "monospace", fontSize: 11 }}>{tip}</td>
+                            {traitNames.map(function(col) {
+                              if (hiddenTraitCols.has(col)) {
+                                return <td key={col} style={{ width: 22, minWidth: 22, maxWidth: 22, padding: 0, background: "#f9fafb" }} />;
+                              }
+                              const val = traitData[tip] ? traitData[tip][col] : null;
+                              return (
+                                <td key={col} style={{ padding: "2px 6px" }}>
+                                  <input
+                                    defaultValue={val === null || val === undefined ? "" : String(val)}
+                                    onBlur={function(e) { handleCellEdit(tip, col, e.target.value); }}
+                                    onKeyDown={function(e) { if (e.key === "Enter") e.target.blur(); }}
+                                    style={{ width: 88, fontSize: 11, padding: "2px 6px", border: "1px solid #e5e7eb", borderRadius: 4, fontFamily: "monospace", outline: "none", background: val === null || val === undefined ? "#f9fafb" : "#fff", color: "#111827", boxSizing: "border-box" }}
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1966,8 +2288,8 @@ export default function App() {
             </div>
             <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>Please cite phyloScope as:</div>
             {[
-              { label: "APA", text: "Yaxley, K. J. (2026). phyloScope (Version 0.2) [Software]. https://keaghanjames.github.io/phylo-scope/" },
-              { label: "BibTeX", text: "@software{yaxley2026phyloscope,\n  author  = {Yaxley, Keaghan J.},\n  title   = {phyloScope},\n  version = {0.2},\n  year    = {2026},\n  url     = {https://keaghanjames.github.io/phylo-scope/}\n}" },
+              { label: "APA", text: "Yaxley, K. J. (2026). phyloScope (Version 0.4) [Software]. https://keaghanjames.github.io/phylo-scope/" },
+              { label: "BibTeX", text: "@software{yaxley2026phyloscope,\n  author  = {Yaxley, Keaghan J.},\n  title   = {phyloScope},\n  version = {0.4},\n  year    = {2026},\n  url     = {https://keaghanjames.github.io/phylo-scope/}\n}" },
             ].map(function(entry) {
               return (
                 <div key={entry.label}>
@@ -1988,23 +2310,25 @@ export default function App() {
 
       {whatsNewOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}
-          onClick={function(e) { if (e.target === e.currentTarget) { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); } }}>
+          onClick={function(e) { if (e.target === e.currentTarget) { localStorage.setItem("phylo_seen_whats_new", "v0.4"); setWhatsNewOpen(false); } }}>
           <div style={{ background: "#fff", borderRadius: 10, padding: 28, maxWidth: 480, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
                 {"What's new in "}
-                <span style={{ color: "#1a5c35" }}>v0.3</span>
+                <span style={{ color: "#1a5c35" }}>v0.4</span>
               </div>
-              <button onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); }}
+              <button onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.4"); setWhatsNewOpen(false); }}
                 style={{ border: "none", background: "none", cursor: "pointer", fontSize: 20, color: "#9ca3af", lineHeight: 1, padding: "0 2px" }}>×</button>
             </div>
             <ul style={{ margin: 0, padding: "0 0 0 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               {[
-                { bold: "Node labels", text: " — display node heights (from root or time-before-present), support values, and BEAST-style annotations directly on the tree via the Clade tab" },
-                { bold: "BEAST annotation support", text: " — trees with [&key=value] annotations are now parsed correctly; annotation keys appear as toggleable display options" },
-                { bold: "NEXUS annotation support", text: " — [&…] annotations in NEXUS files are preserved and displayed alongside translate-table trees" },
-                { bold: "Node notes", text: " — add free-text sticky notes to any node, choosing from five colours; notes are shown as labelled boxes on the canvas" },
-                { bold: "Export with notes", text: " — when exporting Newick, choose whether to embed node notes as [&note=…] annotations in the file" },
+                { bold: "Trait data editor", text: " — persistent side panel showing the trait CSV as a live editable table; edits update the tree visualisation in real time" },
+                { bold: "Create trait CSV", text: " — start a blank trait table pre-populated with all tip labels directly from the Traits tab, no file needed" },
+                { bold: "Auto-scroll & highlight", text: " — clicking a tip on the tree scrolls to its row in the editor; focusing a row highlights the tip on the tree" },
+                { bold: "Add columns", text: " — add new trait columns from inside the editor; they appear on the tree immediately" },
+                { bold: "Hide columns", text: " — collapse any trait column with the ▾ arrow to reduce clutter, expand with ▸" },
+                { bold: "Row sort", text: " — switch between tree order and A→Z alphabetical order in the editor header" },
+                { bold: "Export CSV", text: " — export the current trait table (including any edits or new columns) as a CSV file" },
               ].map(function(item, i) {
                 return (
                   <li key={i} style={{ fontSize: 13, color: "#374151", lineHeight: 1.55 }}>
@@ -2014,7 +2338,7 @@ export default function App() {
               })}
             </ul>
             <button style={Object.assign({}, btn("primary"), { alignSelf: "flex-end" })}
-              onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.3"); setWhatsNewOpen(false); }}>
+              onClick={function() { localStorage.setItem("phylo_seen_whats_new", "v0.4"); setWhatsNewOpen(false); }}>
               Got it
             </button>
           </div>

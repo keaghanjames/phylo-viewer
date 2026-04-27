@@ -1,6 +1,24 @@
 PHYLOSCOPE — PATCH NOTES
 ========================
 
+[v0.4] — 2026-04-27
+--------------------
+- Trait data editor: persistent panel showing the trait CSV as a live editable table
+  - Edits update the continuous gradient and discrete colours on the tree in real time
+  - Clicking a tip on the tree scrolls to its row; focusing a row highlights the tip
+  - Add new trait columns from inside the editor (appear on tree immediately)
+  - Hide / show columns with ▾ / ▸ arrows in the column headers
+  - Toggle row order between tree order and A→Z alphabetical
+  - Export the current table (including edits and new columns) as a CSV
+- "Create trait CSV" button in Traits tab: starts a blank table pre-populated with all
+  tip labels so users can enter data without preparing a file first
+- Continuous trait gradient now recalculates from visible tips only when a clade is
+  focused, collapsed, or extracted
+- Fixed: extracting a clade now resets zoom so the extracted tree is centred in frame
+- Fixed: NEXUS files with [\[&…\]] escaped-bracket BEAST annotations now parse correctly
+- Fixed: focus mode (Collapse others) was cleared when selecting another node
+
+
 [v0.3] — 2026-04-26
 --------------------
 - Node Labels section in Clade tab (always visible, no selection required)
